@@ -1,20 +1,23 @@
 """
 GitHub Tool — Sprint 2
-Responsabilidad: clonar repo, leer archivos, crear Pull Requests.
+Archivo: backend/tools/github_tool.py
+
+Responsabilidad: conectarse a GitHub API, leer archivos de un repo.
 No usa LLM.
 """
 from github import Github
+from github import GithubException
 import os
 
 
 def get_repo_files(repo_url: str) -> list:
     """
     Dado el URL de un repo público de GitHub,
-    devuelve una lista de archivos con su nombre, path y contenido.
+    devuelve una lista de archivos con su nombre, path y extensión.
 
     Ejemplo de retorno:
     [
-        { "name": "main.py", "path": "src/main.py", "content": "..." },
+        { "name": "main.py", "path": "src/main.py", "extension": ".py" },
         ...
     ]
     """
@@ -35,14 +38,12 @@ def get_repo_files(repo_url: str) -> list:
         if file.type == "dir":
             contents.extend(repo.get_contents(file.path))
         else:
-            try:
-                files.append({
-                    "name": file.name,
-                    "path": file.path,
-                    "content": file.decoded_content.decode("utf-8")
-                })
-            except Exception:
-                # Ignorar archivos binarios
-                pass
+            name = file.name
+            extension = os.path.splitext(name)[1]
+            files.append({
+                "name": name,
+                "path": file.path,
+                "extension": extension
+            })
 
     return files

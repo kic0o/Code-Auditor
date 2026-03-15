@@ -1,14 +1,14 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
+from tools.github_tool import get_repo_files
 import os
 
 load_dotenv()
 
-app = FastAPI(title="Code Auditor API", version="1.0.0")
+app = FastAPI(title="Code Auditor API", version="2.0.0")
 
-# Permitir conexiones desde el frontend (React en localhost:5173)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173"],
@@ -18,27 +18,35 @@ app.add_middleware(
 )
 
 # --- Modelos ---
-class AnalyzeRequest(BaseModel):
+class RepoRequest(BaseModel):
     repo_url: str
-
-class AnalyzeResponse(BaseModel):
-    message: str
-    repo_url: str
-    status: str
 
 # --- Endpoints ---
 @app.get("/")
 def root():
     return {"message": "Code Auditor API is running ✅"}
 
-@app.post("/analyze", response_model=AnalyzeResponse)
-def analyze(request: AnalyzeRequest):
+# Sprint 1 — sigue funcionando
+@app.post("/analyze")
+def analyze(request: RepoRequest):
+    return {
+        "message": "Repo recibido correctamente",
+        "repo_url": request.repo_url,
+        "status": "pending"
+    }
+
+# Sprint 2 — nuevo endpoint
+@app.post("/files")
+def get_files(request: RepoRequest):
     """
-    Sprint 1: Recibe la URL del repo y confirma que llegó correctamente.
-    Sprint 2: Aquí se llamará a la GitHub Tool para leer los archivos.
+    Recibe la URL del repo y devuelve la lista de archivos usando GitHub API.
     """
-    return AnalyzeResponse(
-        message="Repo recibido correctamente",
-        repo_url=request.repo_url,
-        status="pending"
-    )
+    try:
+        files = get_repo_files(request.repo_url)
+        return {
+            "repo_url": request.repo_url,
+            "total": len(files),
+            "files": files
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))

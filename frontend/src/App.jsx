@@ -1,10 +1,15 @@
+// Archivo: frontend/src/App.jsx
+// Actualizado en Sprint 2: agrega llamada al endpoint /files y muestra FileList
+
 import { useState } from "react";
 import RepoInput from "./components/RepoInput";
 import StatusCard from "./components/StatusCard";
+import FileList from "./components/FileList";
 import "./App.css";
 
 function App() {
   const [result, setResult] = useState(null);
+  const [fileData, setFileData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
@@ -12,18 +17,29 @@ function App() {
     setLoading(true);
     setError(null);
     setResult(null);
+    setFileData(null);
 
     try {
-      const response = await fetch("http://localhost:8000/analyze", {
+      // Sprint 1 — confirmar que llegó el repo
+      const analyzeRes = await fetch("http://localhost:8000/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ repo_url: repoUrl }),
       });
+      if (!analyzeRes.ok) throw new Error("Error al conectar con el servidor");
+      const analyzeData = await analyzeRes.json();
+      setResult(analyzeData);
 
-      if (!response.ok) throw new Error("Error al conectar con el servidor");
+      // Sprint 2 — obtener lista de archivos del repo
+      const filesRes = await fetch("http://localhost:8000/files", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ repo_url: repoUrl }),
+      });
+      if (!filesRes.ok) throw new Error("Error al obtener los archivos del repositorio");
+      const filesData = await filesRes.json();
+      setFileData(filesData);
 
-      const data = await response.json();
-      setResult(data);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -45,6 +61,7 @@ function App() {
         <RepoInput onAnalyze={handleAnalyze} loading={loading} />
         {error && <div className="error-banner">⚠ {error}</div>}
         {result && <StatusCard result={result} />}
+        {fileData && <FileList data={fileData} />}
       </main>
     </div>
   );
