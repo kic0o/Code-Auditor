@@ -138,14 +138,14 @@ code-auditor/
 
 | Nombre | Rol |
 |--------|-----|
-| Arguello Ruelas Israel | Scrum Master, Backend |
-|        |     |
-|        |     |
-|        |     |
-|        |     |
-|        |     |
-|        |     |
-|        |     |
+| Arenas Trejo Diego Israel | Backend |
+| Arguello Ruelas Israel | Backend / Scrum Master |
+| Fuentes Velez Brayan Gonzalo | Backend |
+| Garduño Villeda Joshua Hashem | Frontend |
+| Oviedo Aparicio Nadia | Frontend |
+| Avila Ponce Alexander Kalid | IA |
+| Herrera Saavedra Jorge Luis | IA |
+| Quiñones Mayorga Rodrigo | IA |
 
 ---
 
