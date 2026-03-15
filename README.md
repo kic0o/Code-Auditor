@@ -138,7 +138,7 @@ code-auditor/
 
 | Nombre | Rol |
 |--------|-----|
-|        |     |
+| Arguello Ruelas Israel | Scrum Master, Backend |
 |        |     |
 |        |     |
 |        |     |
