@@ -1,5 +1,4 @@
 // Archivo: frontend/src/App.jsx
-// Actualizado en Sprint 2: agrega llamada al endpoint /files y muestra FileList
 
 import { useState } from "react";
 import RepoInput from "./components/RepoInput";
@@ -49,14 +48,6 @@ function App() {
 
   return (
     <div className="app">
-      <header className="app-header">
-        <div className="header-badge">IA</div>
-        <h1 className="app-title">Auditor de Código</h1>
-        <p className="app-subtitle">
-          Analiza la calidad, seguridad y arquitectura de tu repositorio
-        </p>
-      </header>
-
       <main className="app-main">
         <RepoInput onAnalyze={handleAnalyze} loading={loading} />
         {error && <div className="error-banner">⚠ {error}</div>}
