@@ -49,10 +49,6 @@ function FileList({ data }) {
           </div>
         ))}
       </div>
-
-      <p className="filelist-note">
-        ✦ Sprint 3: aquí se analizará cada archivo en busca de vulnerabilidades
-      </p>
     </div>
   );
 }
