@@ -31,9 +31,7 @@ function StatusCard({ result }) {
           <span className="status-value">{result.status}</span>
         </div>
       </div>
-      <p className="status-note">
-        ✦ Sprint 2: aquí aparecerá la lista de archivos del repositorio
-      </p>
+      
     </div>
   );
 }
