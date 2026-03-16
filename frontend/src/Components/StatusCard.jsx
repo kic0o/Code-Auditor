@@ -31,7 +31,6 @@ function StatusCard({ result }) {
           <span className="status-value">{result.status}</span>
         </div>
       </div>
-      
     </div>
   );
 }
