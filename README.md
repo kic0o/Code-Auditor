@@ -41,8 +41,8 @@ Agente Central (Orquestador Python)
 ### 1. Clonar el repositorio
 
 ```bash
-git clone https://github.com/TU_USUARIO/TU_REPO.git
-cd TU_REPO
+git clone https://github.com/kic0o/Code-Auditor
+cd Code-Auditor
 ```
 
 ### 2. Configurar el Backend
