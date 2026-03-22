@@ -12,7 +12,7 @@ const App = () => {
   const [selectedFilePaths, setSelectedFilePaths] = useState(new Set());
   const [loadingFiles, setLoadingFiles] = useState(false);
   const [error, setError] = useState(null);
-  
+  const [analysisResult, setAnalysisResult] = useState(null);
   const [uploadedDocs, setUploadedDocs] = useState([]);
   const fileInputRef = useRef(null);
 
@@ -85,10 +85,36 @@ const App = () => {
     setSelectedFilePaths(new Set());
   };
 
-  const startAnalysis = () => {
+  const startAnalysis = async () => {
     if (selectedFilePaths.size === 0) return;
-    setView('analyzing');
-    setTimeout(() => setView('results'), 2500);
+    
+    setView('analyzing'); // Cambiamos a la pantalla de carga
+    setError(null);
+
+    try {
+      // Enviamos la URL y la lista de archivos seleccionados
+      const response = await fetch("http://127.0.0.1:8000/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          repo_url: repoUrl,
+          selected_files: Array.from(selectedFilePaths)
+        }),
+      });
+
+      if (!response.ok) throw new Error("Error al procesar el análisis");
+
+      const data = await response.json();
+      console.log("📊 Reporte Consolidado:", data);
+      
+      setAnalysisResult(data); // Guardamos el JSON que viene de tu utils.py
+      setView('results'); // Mostramos los resultados
+
+    } catch (err) {
+      console.error(err);
+      setError("Error al conectar con el motor de IA.");
+      setView('setup');
+    }
   };
 
   const handleFileChange = (e) => {
@@ -299,7 +325,83 @@ const App = () => {
       </div>
     </div>
   );
+  const ResultsView = () => {
+    if (!analysisResult) return null;
 
+    return (
+      <div className="max-w-5xl mx-auto w-full space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700">
+        
+        {/* Encabezado de Resultados */}
+        <div className="flex flex-col md:flex-row gap-6 items-center justify-between bg-white p-8 rounded-[2.5rem] shadow-xl shadow-slate-200/50 border border-slate-100">
+          <div className="text-left">
+            <h2 className="text-3xl font-black text-slate-900 tracking-tighter uppercase italic">Reporte de Auditoría</h2>
+            <p className="text-slate-400 font-medium">Análisis completado en {analysisResult.files_analyzed} archivos</p>
+          </div>
+          
+          <div className="flex items-center gap-8">
+            <div className="text-center">
+              <div className={`text-5xl font-black ${analysisResult.total_score > 70 ? 'text-green-500' : 'text-orange-500'}`}>
+                {analysisResult.total_score}<span className="text-xl text-slate-300">/100</span>
+              </div>
+              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">Global Score</p>
+            </div>
+            
+            <div className="h-12 w-[1px] bg-slate-100 hidden md:block"></div>
+            
+            <div className="flex gap-4">
+              <div className="text-center px-4 py-2 bg-red-50 rounded-2xl border border-red-100">
+                <p className="text-xl font-black text-red-600">{analysisResult.critical_issues}</p>
+                <p className="text-[9px] font-bold text-red-400 uppercase">Críticos</p>
+              </div>
+              <div className="text-center px-4 py-2 bg-amber-50 rounded-2xl border border-amber-100">
+                <p className="text-xl font-black text-amber-600">{analysisResult.warnings}</p>
+                <p className="text-[9px] font-bold text-amber-400 uppercase">Alertas</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Lista de Hallazgos */}
+        <div className="space-y-4">
+          <h3 className="text-left ml-4 text-[11px] font-black text-slate-400 uppercase tracking-[0.2em]">Hallazgos Detectados</h3>
+          
+          {analysisResult.findings.map((finding, i) => (
+            <div key={i} className="group bg-white p-6 rounded-3xl border border-slate-100 shadow-sm hover:shadow-md transition-all text-left flex gap-6">
+              <div className={`mt-1 p-3 rounded-2xl shrink-0 ${
+                finding.severity === 'critical' ? 'bg-red-100 text-red-600' : 
+                finding.severity === 'warning' ? 'bg-amber-100 text-amber-600' : 'bg-blue-100 text-blue-600'
+              }`}>
+                {finding.severity === 'critical' ? <ShieldAlert size={24} /> : finding.severity === 'warning' ? <AlertCircle size={24} /> : <Info size={24} />}
+              </div>
+              
+              <div className="space-y-2 flex-1">
+                <div className="flex justify-between items-start">
+                  <div>
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-slate-100 text-slate-500 uppercase tracking-wider mb-2 inline-block">
+                      {finding.file_path} : Línea {finding.line}
+                    </span>
+                    <h4 className="text-lg font-bold text-slate-800">{finding.title}</h4>
+                  </div>
+                </div>
+                <p className="text-slate-500 text-sm leading-relaxed">{finding.description}</p>
+                <div className="pt-2 flex items-center gap-2 text-sm">
+                  <span className="font-bold text-slate-700">💡 Sugerencia:</span>
+                  <span className="text-slate-600">{finding.recommendation}</span>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <button 
+          onClick={() => setView('setup')}
+          className="flex items-center gap-2 text-slate-400 font-bold hover:text-blue-600 transition-colors mx-auto pb-10"
+        >
+          <ArrowLeft size={18} /> Volver a configurar análisis
+        </button>
+      </div>
+    );
+  };
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col font-sans selection:bg-blue-100 selection:text-blue-900">
       <Header />
@@ -319,13 +421,7 @@ const App = () => {
              </div>
            </div>
         )}
-        {view === 'results' && (
-          <div className="max-w-7xl mx-auto w-full text-center space-y-8">
-            <h2 className="text-4xl font-black text-slate-900 italic uppercase tracking-tighter">Análisis Finalizado</h2>
-            <p className="text-slate-500">Se han auditado los archivos seleccionados bajo las reglas de negocio.</p>
-            <button onClick={() => setView('setup')} className="text-blue-600 font-bold hover:underline">← Volver al explorador</button>
-          </div>
-        )}
+        {view === 'results' && <ResultsView />}
       </main>
       <Footer />
       

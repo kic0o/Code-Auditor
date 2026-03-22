@@ -35,48 +35,47 @@ def root():
 @app.post("/analyze", response_model=ConsolidatedReport)
 def analyze(request: RepoRequest):
     """
-    Recibe la URL y los archivos seleccionados.
-    Simula el análisis de la IA y devuelve el JSON consolidado.
+    Simula el análisis de la IA basado en los nuevos criterios:
+    Crítico = Arquitectura | Advertencia = Errores | Sugerencia = Prácticas
     """
-    # 1. Datos simulados (Mock) fingiendo que Gemini ya analizó el código
     mock_ai_data = [
         {
             "findings": [
                 {
-                    "severity": "critical", 
-                    "file_path": "backend/main.py", 
-                    "line": 15, 
-                    "title": "CORS demasiado permisivo", 
-                    "description": "El uso de allow_origins=['*'] en producción es vulnerable a ataques.", 
-                    "recommendation": "Definir dominios específicos en la lista de origins."
+                    "severity": "critical",
+                    "type": "Arquitectura",
+                    "file_path": "backend/services/user_service.py",
+                    "line": 45,
+                    "title": "Violación de Regla de Negocio #4",
+                    "description": "El documento de arquitectura exige que toda validación de usuario use el decorador @validate_auth. Esta función accede a la BD directamente.",
+                    "recommendation": "Implementar el decorador @validate_auth según el estándar del PDF."
                 },
                 {
-                    "severity": "warning", 
-                    "file_path": "frontend/src/App.jsx", 
-                    "line": 42, 
-                    "title": "Variable sin usar", 
-                    "description": "Se importó 'useEffect' pero no se está utilizando en el componente.", 
-                    "recommendation": "Eliminar la importación para mantener el código limpio."
+                    "severity": "warning",
+                    "type": "Lógica / Seguridad",
+                    "file_path": "backend/main.py",
+                    "line": 89,
+                    "title": "Bloque Try-Except demasiado genérico",
+                    "description": "Se detectó un except genérico que podría capturar y ocultar errores críticos de conexión, dificultando el debug.",
+                    "recommendation": "Capturar excepciones específicas como 'HTTPException' o 'ConnectionError'."
                 },
                 {
-                    "severity": "info", 
-                    "file_path": "README.md", 
-                    "line": 0, 
-                    "title": "Falta documentación", 
-                    "description": "No hay instrucciones de cómo correr el entorno local.", 
-                    "recommendation": "Agregar una sección de 'Pasos para instalación'."
+                    "severity": "info",
+                    "type": "Buenas Prácticas",
+                    "file_path": "frontend/src/components/Header.jsx",
+                    "line": 12,
+                    "title": "Componente Sobrecargado",
+                    "description": "El componente Header excede las 100 líneas. Esto viola el principio de responsabilidad única del Clean Code.",
+                    "recommendation": "Extraer la lógica de navegación a un subcomponente 'Navbar.jsx'."
                 }
             ]
         }
     ]
     
-    # 2. Determinamos cuántos archivos se están "analizando"
+    # Calculamos el reporte usando tu función consolidada
     total_archivos = len(request.selected_files) if request.selected_files else 3
-    
-    # 3. Llamamos a TU función consolidadora
     reporte_final = consolidate_results(mock_ai_data, total_archivos)
     
-    # 4. FastAPI valida automáticamente que cumpla con ConsolidatedReport y lo devuelve al frontend
     return reporte_final
 
 # Sprint 2 — sigue funcionando intacto
