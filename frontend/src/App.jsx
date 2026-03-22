@@ -18,27 +18,52 @@ const App = () => {
 
   // Conexión real con el Backend (Sprint 2)
   const handleConnect = async () => {
-    if (!repoUrl.trim()) return;
-    setLoadingFiles(true);
+    if (!repoUrl) {
+      alert("⚠️ Por favor, ingresa una URL de GitHub primero.");
+      return;
+    }
+
+    setLoadingFiles(true); // ✅ Corregido (usando tu variable real)
     setError(null);
-    setSelectedFilePaths(new Set());
+
     try {
-      const res = await fetch("http://localhost:8000/files", {
+      console.log("🚀 Enviando URL al backend:", repoUrl);
+
+      const response = await fetch("http://127.0.0.1:8000/files", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+        },
         body: JSON.stringify({ repo_url: repoUrl }),
       });
-      if (!res.ok) throw new Error("No se pudo conectar con el repositorio.");
-      const data = await res.json();
-      setRepoFiles(data.files);
+
+      if (!response.ok) {
+        throw new Error(`El servidor respondió con código: ${response.status}`);
+      }
+
+      const data = await response.json();
+      console.log("✅ Archivos recibidos:", data);
+
+      // Ahora data.files ya viene súper estructurado desde tu nuevo backend
+      const archivosMapeados = data.files.map((archivo) => ({
+        path: archivo.path,
+        extension: archivo.extension,
+        selected: true // Por defecto seleccionamos todos
+      }));
+
+      setRepoFiles(archivosMapeados);
+      setSelectedFilePaths(new Set(archivosMapeados.map(f => f.path)));
+
+      setRepoFiles(archivosMapeados); // ✅ Corregido (usando tu variable real)
       
-      // Por defecto seleccionamos todos al conectar, pero el usuario puede cambiarlo
-      const allPaths = data.files.map(f => f.path);
-      setSelectedFilePaths(new Set(allPaths));
+      // ✅ Automáticamente seleccionamos todos los archivos
+      setSelectedFilePaths(new Set(archivosMapeados.map(f => f.path)));
+
     } catch (err) {
-      setError(err.message);
+      console.error("❌ Error en la conexión:", err);
+      setError("No se pudo conectar con el backend. Verifica que la URL sea válida.");
     } finally {
-      setLoadingFiles(false);
+      setLoadingFiles(false); // ✅ Corregido
     }
   };
 
