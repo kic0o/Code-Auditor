@@ -1,17 +1,16 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from dotenv import load_dotenv
-from tools.github_tool import get_repo_files
-import os
 
-# Importamos las herramientas que acabas de crear
+from tools.github_tool import get_repo_files
 from schemas import ConsolidatedReport
 from utils import consolidate_results
+from services.llm_service import analyze_with_llm, LLMTimeoutError, LLMServiceError
 
 load_dotenv()
 
-app = FastAPI(title="Code Auditor API", version="2.0.0")
+app = FastAPI(title="Code Auditor API", version="3.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -24,64 +23,75 @@ app.add_middleware(
 # --- Modelos ---
 class RepoRequest(BaseModel):
     repo_url: str
-    selected_files: list[str] = [] # Añadimos esto para saber qué archivos seleccionó el usuario en el frontend
+    selected_files: list[str] = Field(default_factory=list)
+    llm_mode: str = "success"  # success | timeout | error
+
 
 # --- Endpoints ---
 @app.get("/")
 def root():
     return {"message": "Code Auditor API is running ✅"}
 
-# Sprint 3 y 4 — Endpoint actualizado con el consolidador
+
 @app.post("/analyze", response_model=ConsolidatedReport)
 def analyze(request: RepoRequest):
     """
-    Simula el análisis de la IA basado en los nuevos criterios:
-    Crítico = Arquitectura | Advertencia = Errores | Sugerencia = Prácticas
-    """
-    mock_ai_data = [
-        {
-            "findings": [
-                {
-                    "severity": "critical",
-                    "type": "Arquitectura",
-                    "file_path": "backend/services/user_service.py",
-                    "line": 45,
-                    "title": "Violación de Regla de Negocio #4",
-                    "description": "El documento de arquitectura exige que toda validación de usuario use el decorador @validate_auth. Esta función accede a la BD directamente.",
-                    "recommendation": "Implementar el decorador @validate_auth según el estándar del PDF."
-                },
-                {
-                    "severity": "warning",
-                    "type": "Lógica / Seguridad",
-                    "file_path": "backend/main.py",
-                    "line": 89,
-                    "title": "Bloque Try-Except demasiado genérico",
-                    "description": "Se detectó un except genérico que podría capturar y ocultar errores críticos de conexión, dificultando el debug.",
-                    "recommendation": "Capturar excepciones específicas como 'HTTPException' o 'ConnectionError'."
-                },
-                {
-                    "severity": "info",
-                    "type": "Buenas Prácticas",
-                    "file_path": "frontend/src/components/Header.jsx",
-                    "line": 12,
-                    "title": "Componente Sobrecargado",
-                    "description": "El componente Header excede las 100 líneas. Esto viola el principio de responsabilidad única del Clean Code.",
-                    "recommendation": "Extraer la lógica de navegación a un subcomponente 'Navbar.jsx'."
-                }
-            ]
-        }
-    ]
-    
-    # Calculamos el reporte usando tu función consolidada
-    total_archivos = len(request.selected_files) if request.selected_files else 3
-    reporte_final = consolidate_results(mock_ai_data, total_archivos)
-    
-    return reporte_final
+    Sprint 3:
+    Simula el análisis mediante un LLM y maneja errores si el LLM no responde.
 
-# Sprint 2 — sigue funcionando intacto
+    llm_mode:
+    - success: el LLM responde correctamente
+    - timeout: el LLM no responde a tiempo
+    - error: el servicio LLM falla
+    """
+    if not request.selected_files:
+        raise HTTPException(
+            status_code=400,
+            detail="Debes seleccionar al menos un archivo para analizar."
+        )
+
+    ai_responses = []
+
+    try:
+        for file_path in request.selected_files:
+            # Por ahora el contenido del archivo es simulado.
+            # Más adelante aquí se podrá leer el contenido real desde GitHub.
+            simulated_content = f"Contenido simulado del archivo {file_path}"
+
+            llm_result = analyze_with_llm(
+                file_path=file_path,
+                file_content=simulated_content,
+                mode=request.llm_mode
+            )
+
+            ai_responses.append(llm_result)
+
+        reporte_final = consolidate_results(ai_responses, len(request.selected_files))
+        return reporte_final
+
+    except LLMTimeoutError as e:
+        raise HTTPException(
+            status_code=504,
+            detail=f"Error de timeout al comunicarse con el LLM: {str(e)}"
+        )
+
+    except LLMServiceError as e:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Error del servicio LLM: {str(e)}"
+        )
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error interno durante el análisis: {str(e)}"
+        )
+
+
 @app.post("/files")
 def get_files(request: RepoRequest):
     """
+    Sprint 2:
     Recibe la URL del repo y devuelve la lista de archivos usando GitHub API.
     """
     try:
