@@ -1,19 +1,27 @@
-def consolidate_results(ai_responses: list, total_files: int) -> dict:
+def consolidate_results(ai_responses: list, total_files_requested: int, skipped_files: list | None = None) -> dict:
     """
     Consolida las respuestas del análisis en un reporte maestro.
     """
+    skipped_files = skipped_files or []
+
     master_report = {
         "total_score": 100,
-        "files_analyzed": total_files,
+        "files_analyzed": 0,
         "critical_issues": 0,
         "warnings": 0,
         "info_suggestions": 0,
-        "findings": []
+        "findings": [],
+        "skipped_files": skipped_files,
+        "analyzed_files_requested": total_files_requested,
     }
 
     total_penalty = 0
+    analyzed_count = 0
 
     for response in ai_responses:
+        if response.get("analyzed", False):
+            analyzed_count += 1
+
         findings = response.get("findings", [])
         for finding in findings:
             master_report["findings"].append(finding)
@@ -30,6 +38,7 @@ def consolidate_results(ai_responses: list, total_files: int) -> dict:
                 master_report["info_suggestions"] += 1
                 total_penalty += 1
 
+    master_report["files_analyzed"] = analyzed_count
     master_report["total_score"] = max(0, 100 - total_penalty)
 
     return master_report
