@@ -7,7 +7,7 @@ class LLMTimeoutError(Exception):
 
 
 class LLMServiceError(Exception):
-    """Se lanza cuando el LLM falla de forma general."""
+    """Se lanza cuando el servicio LLM falla."""
     pass
 
 
@@ -17,12 +17,10 @@ def analyze_with_llm(file_path: str, file_content: str, mode: str = "success") -
 
     mode:
     - success: responde correctamente
-    - timeout: simula que no responde a tiempo
+    - timeout: simula timeout
     - error: simula error general del servicio
     """
-
-    # Simulación de latencia
-    time.sleep(1)
+    time.sleep(0.5)
 
     if mode == "timeout":
         raise LLMTimeoutError("El LLM no respondió dentro del tiempo esperado.")
@@ -30,8 +28,9 @@ def analyze_with_llm(file_path: str, file_content: str, mode: str = "success") -
     if mode == "error":
         raise LLMServiceError("El servicio LLM no está disponible en este momento.")
 
-    # Respuesta simulada, como si viniera del modelo
+    # Aquí aún es simulado, pero ya con estructura real
     return {
+        "analyzed": True,
         "findings": [
             {
                 "severity": "warning",
