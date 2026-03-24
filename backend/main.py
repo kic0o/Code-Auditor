@@ -3,14 +3,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 
-from tools.github_tool import get_repo_files
+from tools.github_tool import get_repo_files, get_file_content
 from schemas import ConsolidatedReport
 from utils import consolidate_results
 from services.llm_service import analyze_with_llm, LLMTimeoutError, LLMServiceError
 
 load_dotenv()
 
-app = FastAPI(title="Code Auditor API", version="3.0.0")
+app = FastAPI(title="Code Auditor API", version="4.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -20,29 +20,45 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- Modelos ---
+
 class RepoRequest(BaseModel):
     repo_url: str
     selected_files: list[str] = Field(default_factory=list)
     llm_mode: str = "success"  # success | timeout | error
 
 
-# --- Endpoints ---
 @app.get("/")
 def root():
     return {"message": "Code Auditor API is running ✅"}
 
 
+@app.post("/files")
+def get_files(request: RepoRequest):
+    """
+    Devuelve la lista de archivos analizables de un repositorio.
+    Excluye carpetas irrelevantes y binarios conocidos.
+    """
+    try:
+        files = get_repo_files(request.repo_url)
+        return {
+            "repo_url": request.repo_url,
+            "total": len(files),
+            "files": files
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @app.post("/analyze", response_model=ConsolidatedReport)
 def analyze(request: RepoRequest):
     """
-    Sprint 3:
-    Simula el análisis mediante un LLM y maneja errores si el LLM no responde.
-
-    llm_mode:
-    - success: el LLM responde correctamente
-    - timeout: el LLM no responde a tiempo
-    - error: el servicio LLM falla
+    Sprint 4:
+    Manejo de errores y casos edge:
+    - repos grandes
+    - archivos binarios
+    - archivos demasiado grandes
+    - errores parciales por archivo
+    - error/timeout del LLM simulado
     """
     if not request.selected_files:
         raise HTTPException(
@@ -50,23 +66,61 @@ def analyze(request: RepoRequest):
             detail="Debes seleccionar al menos un archivo para analizar."
         )
 
+    MAX_FILES_PER_ANALYSIS = 10
+
+    if len(request.selected_files) > MAX_FILES_PER_ANALYSIS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Has seleccionado demasiados archivos. "
+                f"El máximo permitido por análisis es {MAX_FILES_PER_ANALYSIS}."
+            )
+        )
+
     ai_responses = []
+    skipped_files = []
 
     try:
         for file_path in request.selected_files:
-            # Por ahora el contenido del archivo es simulado.
-            # Más adelante aquí se podrá leer el contenido real desde GitHub.
-            simulated_content = f"Contenido simulado del archivo {file_path}"
+            try:
+                file_data = get_file_content(request.repo_url, file_path)
 
-            llm_result = analyze_with_llm(
-                file_path=file_path,
-                file_content=simulated_content,
-                mode=request.llm_mode
+                llm_result = analyze_with_llm(
+                    file_path=file_path,
+                    file_content=file_data["content"],
+                    mode=request.llm_mode
+                )
+
+                ai_responses.append(llm_result)
+
+            except ValueError as file_error:
+                skipped_files.append({
+                    "file_path": file_path,
+                    "reason": str(file_error)
+                })
+
+            except Exception as file_error:
+                skipped_files.append({
+                    "file_path": file_path,
+                    "reason": f"Error inesperado al procesar archivo: {str(file_error)}"
+                })
+
+        if not ai_responses and skipped_files:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Ningún archivo pudo ser analizado. "
+                    "Todos fueron omitidos por ser inválidos, binarios, "
+                    "demasiado grandes o no legibles."
+                )
             )
 
-            ai_responses.append(llm_result)
+        reporte_final = consolidate_results(
+            ai_responses=ai_responses,
+            total_files_requested=len(request.selected_files),
+            skipped_files=skipped_files
+        )
 
-        reporte_final = consolidate_results(ai_responses, len(request.selected_files))
         return reporte_final
 
     except LLMTimeoutError as e:
@@ -81,25 +135,11 @@ def analyze(request: RepoRequest):
             detail=f"Error del servicio LLM: {str(e)}"
         )
 
+    except HTTPException:
+        raise
+
     except Exception as e:
         raise HTTPException(
             status_code=500,
             detail=f"Error interno durante el análisis: {str(e)}"
         )
-
-
-@app.post("/files")
-def get_files(request: RepoRequest):
-    """
-    Sprint 2:
-    Recibe la URL del repo y devuelve la lista de archivos usando GitHub API.
-    """
-    try:
-        files = get_repo_files(request.repo_url)
-        return {
-            "repo_url": request.repo_url,
-            "total": len(files),
-            "files": files
-        }
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
