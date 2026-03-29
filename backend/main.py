@@ -84,7 +84,13 @@ def analyze(request: RepoRequest):
         for file_path in request.selected_files:
             try:
                 file_data = get_file_content(request.repo_url, file_path)
-
+                # 🕵️‍♂️ EL ESPÍA: Imprimimos en la consola lo que se descargó
+                print("\n" + "="*50)
+                print(f"📄 ARCHIVO: {file_path}")
+                print(f"📏 TAMAÑO: {len(file_data['content'])} caracteres")
+                print(f"📦 CONTENIDO CRUDO (Primeros 150 caracteres):\n{file_data['content'][:150]}...")
+                print("="*50 + "\n")
+                
                 llm_result = analyze_with_llm(
                     file_path=file_path,
                     file_content=file_data["content"],
@@ -100,6 +106,7 @@ def analyze(request: RepoRequest):
                 })
 
             except Exception as file_error:
+                print(f"🛑 ERROR REAL AL CONECTAR CON JORGE: {str(file_error)}")
                 skipped_files.append({
                     "file_path": file_path,
                     "reason": f"Error inesperado al procesar archivo: {str(file_error)}"

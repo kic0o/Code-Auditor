@@ -4,11 +4,11 @@ from typing import List, Literal, Optional
 
 class Finding(BaseModel):
     severity: Literal["critical", "warning", "info"] = Field(
-        ...,
+        default="warning", # ✅ Valor por defecto si Jorge no lo manda
         description="Nivel de severidad"
     )
     type: str = Field(
-        ...,
+        default="General", # ✅ Valor por defecto
         description="Categoría del problema"
     )
     file_path: str = Field(
@@ -20,7 +20,7 @@ class Finding(BaseModel):
         description="Línea del hallazgo"
     )
     title: str = Field(
-        ...,
+        default="Hallazgo detectado", # ✅ Valor por defectofcedfdfdfdf
         description="Título corto del problema"
     )
     description: str = Field(
@@ -30,6 +30,14 @@ class Finding(BaseModel):
     recommendation: str = Field(
         ...,
         description="Cómo solucionarlo"
+    )
+    original_code: str = Field(
+        default="",
+        description="Código vulnerable original"
+    )
+    secure_code: str = Field(
+        default="",
+        description="Sugerencia de código seguro"
     )
 
 
