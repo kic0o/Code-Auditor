@@ -2,7 +2,7 @@ import React, { useState, useRef, useMemo } from 'react';
 import { 
   Github, FileText, Upload, Search, ChevronRight, Folder, File, 
   Play, CheckCircle, AlertCircle, ArrowLeft, Zap, ShieldAlert, Info, ExternalLink, X,
-  CheckSquare, Square
+  CheckSquare, Square, Code, Check
 } from 'lucide-react';
 
 const App = () => {
@@ -130,7 +130,9 @@ const folderCount = useMemo(() => {
       if (!response.ok) throw new Error("Error al procesar el análisis");
 
       const data = await response.json();
-      console.log("📊 Reporte Consolidado:", data);
+      console.log("📊 REPORTE RECIBIDO DEL BACKEND:", data); // <--- AGREGA ESTO
+      setAnalysisResult(data);
+      setView('results');
       
       setAnalysisResult(data); // Guardamos el JSON que viene de tu utils.py
       setView('results'); // Mostramos los resultados
@@ -389,133 +391,147 @@ const folderCount = useMemo(() => {
   </div>
 );
   const ResultsView = () => {
-   if (!analysisResult) return null;
+    if (!analysisResult) return null;
 
     return (
-     <div className="max-w-5xl mx-auto w-full space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700">
-      
-      {/* Encabezado de Resultados (Se mantiene igual) */}
-      <div className="flex flex-col md:flex-row gap-6 items-center justify-between bg-white p-8 rounded-[2.5rem] shadow-xl shadow-slate-200/50 border border-slate-100">
-        <div className="text-left">
-          <h2 className="text-3xl font-black text-slate-900 tracking-tighter uppercase italic">Reporte de Auditoría</h2>
-          <p className="text-slate-400 font-medium">Análisis completado en {analysisResult.files_analyzed} archivos</p>
-        </div>
+      <div className="max-w-5xl mx-auto w-full space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700">
         
-        <div className="flex items-center gap-8">
-          <div className="text-center">
-            <div className={`text-5xl font-black ${analysisResult.total_score > 70 ? 'text-green-500' : 'text-orange-500'}`}>
-              {analysisResult.total_score}<span className="text-xl text-slate-300">/100</span>
-            </div>
-            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">Global Score</p>
+        {/* Encabezado de Resultados */}
+        <div className="flex flex-col md:flex-row gap-6 items-center justify-between bg-white p-8 rounded-[2.5rem] shadow-xl shadow-slate-200/50 border border-slate-100">
+          <div className="text-left">
+            <h2 className="text-3xl font-black text-slate-900 tracking-tighter uppercase italic">Reporte de Auditoría</h2>
+            <p className="text-slate-400 font-medium">Análisis completado en {analysisResult.files_analyzed} archivos</p>
           </div>
-          <div className="h-12 w-[1px] bg-slate-100 hidden md:block"></div>
-          <div className="flex gap-4">
-            <div className="text-center px-4 py-2 bg-red-50 rounded-2xl border border-red-100">
-              <p className="text-xl font-black text-red-600">{analysisResult.critical_issues}</p>
-              <p className="text-[9px] font-bold text-red-400 uppercase">Críticos</p>
+          
+          <div className="flex items-center gap-8">
+            <div className="text-center">
+              <div className={`text-5xl font-black ${analysisResult.total_score > 70 ? 'text-green-500' : 'text-orange-500'}`}>
+                {analysisResult.total_score}<span className="text-xl text-slate-300">/100</span>
+              </div>
+              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">Global Score</p>
             </div>
-            <div className="text-center px-4 py-2 bg-amber-50 rounded-2xl border border-amber-100">
-              <p className="text-xl font-black text-amber-600">{analysisResult.warnings}</p>
-              <p className="text-[9px] font-bold text-amber-400 uppercase">Alertas</p>
+            <div className="h-12 w-[1px] bg-slate-100 hidden md:block"></div>
+            <div className="flex gap-4">
+              <div className="text-center px-4 py-2 bg-red-50 rounded-2xl border border-red-100">
+                <p className="text-xl font-black text-red-600">{analysisResult.critical_issues}</p>
+                <p className="text-[9px] font-bold text-red-400 uppercase">Críticos</p>
+              </div>
+              <div className="text-center px-4 py-2 bg-amber-50 rounded-2xl border border-amber-100">
+                <p className="text-xl font-black text-amber-600">{analysisResult.warnings}</p>
+                <p className="text-[9px] font-bold text-amber-400 uppercase">Alertas</p>
+              </div>
             </div>
           </div>
         </div>
-      </div>
 
-      {/* --- BARRA DE FILTROS --- */}
-      <div className="flex flex-wrap gap-4 items-center bg-white/50 p-4 rounded-3xl border border-slate-100 backdrop-blur-sm">
-        <div className="flex items-center gap-2">
-          <span className="text-[10px] font-black text-slate-400 uppercase ml-2">Severidad:</span>
-          <select 
-            value={filterSeverity} 
-            onChange={(e) => setFilterSeverity(e.target.value)}
-            className="text-xs font-bold bg-white border border-slate-200 rounded-xl px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500/20"
-          >
-            <option value="all">Todos</option>
-            <option value="critical">Críticos</option>
-            <option value="warning">Advertencias</option>
-            <option value="info">Informativos</option>
-          </select>
+        {/* Barra de Filtros */}
+        <div className="flex flex-wrap gap-4 items-center bg-white/50 p-4 rounded-3xl border border-slate-100 backdrop-blur-sm">
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] font-black text-slate-400 uppercase ml-2">Severidad:</span>
+            <select 
+              value={filterSeverity} 
+              onChange={(e) => setFilterSeverity(e.target.value)}
+              className="text-xs font-bold bg-white border border-slate-200 rounded-xl px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500/20"
+            >
+              <option value="all">Todos</option>
+              <option value="critical">Críticos</option>
+              <option value="warning">Advertencias</option>
+              <option value="info">Informativos</option>
+            </select>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] font-black text-slate-400 uppercase ml-2">Tipo:</span>
+            <select 
+              value={filterType} 
+              onChange={(e) => setFilterType(e.target.value)}
+              className="text-xs font-bold bg-white border border-slate-200 rounded-xl px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500/20"
+            >
+              {uniqueTypes.map(t => (
+                <option key={t} value={t}>{t === 'all' ? 'Todos los tipos' : t}</option>
+              ))}
+            </select>
+          </div>
         </div>
 
-        <div className="flex items-center gap-2">
-          <span className="text-[10px] font-black text-slate-400 uppercase ml-2">Tipo:</span>
-          <select 
-            value={filterType} 
-            onChange={(e) => setFilterType(e.target.value)}
-            className="text-xs font-bold bg-white border border-slate-200 rounded-xl px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500/20"
-          >
-            {uniqueTypes.map(t => (
-              <option key={t} value={t}>{t === 'all' ? 'Todos los tipos' : t}</option>
-            ))}
-          </select>
-        </div>
-
-        {(filterSeverity !== 'all' || filterType !== 'all') && (
-          <button 
-            onClick={() => {setFilterSeverity('all'); setFilterType('all');}}
-            className="text-[10px] font-black text-blue-600 uppercase hover:underline ml-auto mr-4"
-          >
-            Limpiar Filtros
-          </button>
-        )}
-      </div>
-
-      {/* Lista de Hallazgos Filtrados */}
-      <div className="space-y-4">
-        <div className="flex justify-between items-center px-4">
-           <h3 className="text-[11px] font-black text-slate-400 uppercase tracking-[0.2em]">
+        {/* Lista de Hallazgos */}
+        <div className="space-y-4">
+          <h3 className="text-[11px] font-black text-slate-400 uppercase tracking-[0.2em] px-4">
             Hallazgos Detectados ({filteredFindings.length})
           </h3>
-        </div>
-        
-        {filteredFindings.length > 0 ? (
-          filteredFindings.map((finding, i) => (
-            <div key={i} className="group bg-white p-6 rounded-3xl border border-slate-100 shadow-sm hover:shadow-md transition-all text-left flex gap-6">
-              <div className={`mt-1 p-3 rounded-2xl shrink-0 ${
-                finding.severity === 'critical' ? 'bg-red-100 text-red-600' : 
-                finding.severity === 'warning' ? 'bg-amber-100 text-amber-600' : 'bg-blue-100 text-blue-600'
-              }`}>
-                {finding.severity === 'critical' ? <ShieldAlert size={24} /> : finding.severity === 'warning' ? <AlertCircle size={24} /> : <Info size={24} />}
-              </div>
-              
-              <div className="space-y-2 flex-1">
-                <div className="flex justify-between items-start">
-                  <div>
-                    <div className="flex gap-2 mb-2">
-                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-slate-100 text-slate-500 uppercase tracking-wider">
-                        {finding.file_path} : Línea {finding.line}
-                      </span>
-                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-blue-50 text-blue-600 uppercase tracking-wider">
-                        {finding.type}
-                      </span>
+          
+          {filteredFindings.length > 0 ? (
+            filteredFindings.map((finding, i) => (
+              <div key={i} className="group bg-white p-6 rounded-3xl border border-slate-100 shadow-sm hover:shadow-md transition-all text-left flex flex-col gap-6">
+                <div className="flex gap-6">
+                  <div className={`mt-1 p-3 rounded-2xl shrink-0 ${
+                    finding.severity === 'critical' ? 'bg-red-100 text-red-600' : 
+                    finding.severity === 'warning' ? 'bg-amber-100 text-amber-600' : 'bg-blue-100 text-blue-600'
+                  }`}>
+                    {finding.severity === 'critical' ? <ShieldAlert size={24} /> : finding.severity === 'warning' ? <AlertCircle size={24} /> : <Info size={24} />}
+                  </div>
+                  
+                  <div className="space-y-2 flex-1">
+                    <div className="flex justify-between items-start">
+                      <div>
+                        <div className="flex gap-2 mb-2">
+                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-slate-100 text-slate-500 uppercase tracking-wider">
+                            {finding.file_path} : Línea {finding.line}
+                          </span>
+                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-blue-50 text-blue-600 uppercase tracking-wider">
+                            {finding.type}
+                          </span>
+                        </div>
+                        <h4 className="text-lg font-bold text-slate-800">{finding.title}</h4>
+                      </div>
                     </div>
-                    <h4 className="text-lg font-bold text-slate-800">{finding.title}</h4>
+                    <p className="text-slate-500 text-sm leading-relaxed">{finding.description}</p>
+                    <div className="pt-2 flex items-center gap-2 text-sm">
+                      <span className="font-bold text-slate-700">💡 Sugerencia:</span>
+                      <span className="text-slate-600">{finding.recommendation}</span>
+                    </div>
                   </div>
                 </div>
-                <p className="text-slate-500 text-sm leading-relaxed">{finding.description}</p>
-                <div className="pt-2 flex items-center gap-2 text-sm">
-                  <span className="font-bold text-slate-700">💡 Sugerencia:</span>
-                  <span className="text-slate-600">{finding.recommendation}</span>
-                </div>
-              </div>
-            </div>
-          ))
-        ) : (
-          <div className="bg-slate-100/50 border-2 border-dashed border-slate-200 rounded-3xl py-12 text-center">
-            <p className="text-slate-400 font-medium italic">No hay hallazgos que coincidan con los filtros seleccionados.</p>
-          </div>
-        )}
-      </div>
 
-      <button 
-        onClick={() => setView('setup')}
-        className="flex items-center gap-2 text-slate-400 font-bold hover:text-blue-600 transition-colors mx-auto pb-10"
-      >
-        <ArrowLeft size={18} /> Volver a configurar análisis
-      </button>
-    </div>
-  );
+                {/* --- COMPARADOR DE CÓDIGO --- */}
+                {(finding.original_code || finding.secure_code) && (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 border-t border-slate-50 pt-6">
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2 text-[10px] font-black text-red-400 uppercase tracking-widest px-1">
+                        <X size={12} /> Código Original
+                      </div>
+                      <pre className="bg-red-50/30 border border-red-100 p-4 rounded-xl text-[11px] font-mono text-red-800 overflow-x-auto whitespace-pre-wrap">
+                        <code>{finding.original_code || "# No hay código disponible"}</code>
+                      </pre>
+                    </div>
+
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2 text-[10px] font-black text-green-500 uppercase tracking-widest px-1">
+                        <Check size={12} /> Código Corregido
+                      </div>
+                      <pre className="bg-green-50 border border-green-100 p-4 rounded-xl text-[11px] font-mono text-green-800 overflow-x-auto whitespace-pre-wrap shadow-inner">
+                        <code>{finding.secure_code || "# Sin cambios requeridos"}</code>
+                      </pre>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ))
+          ) : (
+            <div className="bg-slate-100/50 border-2 border-dashed border-slate-200 rounded-3xl py-12 text-center">
+              <p className="text-slate-400 font-medium italic">No hay hallazgos que coincidan con los filtros seleccionados.</p>
+            </div>
+          )}
+        </div>
+
+        <button 
+          onClick={() => setView('setup')}
+          className="flex items-center gap-2 text-slate-400 font-bold hover:text-blue-600 transition-colors mx-auto pb-10"
+        >
+          <ArrowLeft size={18} /> Volver a configurar análisis
+        </button>
+      </div>
+    );
   };
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col font-sans selection:bg-blue-100 selection:text-blue-900">
