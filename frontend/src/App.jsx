@@ -146,11 +146,22 @@ const folderCount = useMemo(() => {
 
   const handleFileChange = (e) => {
     const files = Array.from(e.target.files || []);
-    const newDocs = files.map(file => ({
-      name: file.name,
-      status: 'ready'
-    }));
-    setUploadedDocs(prev => [...prev, ...newDocs]);
+    if (!files.length) return;
+    const newDocs = files.map(file => ({ name: file.name, status: 'processing' }));
+    setUploadedDocs(prev => {
+      const updated = [...prev, ...newDocs];
+      setTimeout(() => {
+        setUploadedDocs(current =>
+          current.map(doc =>
+            newDocs.find(n => n.name === doc.name) && doc.status === 'processing'
+              ? { ...doc, status: 'processed' }
+              : doc
+          )
+        );
+      }, 1200);
+      return updated;
+    });
+    if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
   const removeDoc = (index) => {
@@ -161,11 +172,20 @@ const folderCount = useMemo(() => {
   const onDrop = (e) => {
     e.preventDefault();
     const files = Array.from(e.dataTransfer.files || []);
-    const newDocs = files.map(file => ({
-      name: file.name,
-      status: 'ready'
-    }));
-    setUploadedDocs(prev => [...prev, ...newDocs]);
+    const newDocs = files.map(file => ({ name: file.name, status: 'processing' }));
+    setUploadedDocs(prev => {
+      const updated = [...prev, ...newDocs];
+      setTimeout(() => {
+        setUploadedDocs(current =>
+          current.map(doc =>
+            newDocs.find(n => n.name === doc.name) && doc.status === 'processing'
+              ? { ...doc, status: 'processed' }
+              : doc
+          )
+        );
+      }, 1200);
+      return updated;
+    });
   };
 
   // --- COMPONENTES DE INTERFAZ ---
@@ -295,19 +315,62 @@ const folderCount = useMemo(() => {
 
     {/* Lista de archivos subidos para que el usuario sepa que sí se cargaron */}
     {uploadedDocs.length > 0 && (
-      <div className="mt-4 space-y-2">
-        {uploadedDocs.map((doc, i) => (
-          <div key={i} className="flex items-center justify-between p-2 bg-slate-50 rounded-lg border border-slate-100">
-            <span className="text-[10px] font-medium text-slate-600 truncate max-w-[140px]">{doc.name}</span>
-            <button onClick={() => removeDoc(i)} className="text-slate-400 hover:text-red-500 transition-colors">
-              <X size={12} />
-            </button>
-          </div>
-        ))}
+            <div className="mt-4 space-y-2">
+              {uploadedDocs.map((doc, i) => (
+                <div
+                  key={i}
+                  className={`flex items-center justify-between p-3 rounded-xl border transition-all duration-500 ${
+                    doc.status === 'processed'
+                      ? 'bg-green-50 border-green-200'
+                      : 'bg-slate-50 border-slate-200'
+                  }`}
+                >
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    {/* Spinner o check según estado */}
+                    {doc.status === 'processing' ? (
+                      <div className="w-4 h-4 border-2 border-blue-400 border-t-transparent rounded-full animate-spin flex-shrink-0" />
+                    ) : (
+                      <CheckCircle size={15} className="text-green-500 flex-shrink-0" />
+                    )}
+ 
+                    {/* Badge de extensión */}
+                    <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded flex-shrink-0 ${
+                      doc.status === 'processed' ? 'bg-green-100 text-green-700' : 'bg-slate-200 text-slate-500'
+                    }`}>
+                      {doc.name.split('.').pop().toUpperCase()}
+                    </span>
+ 
+                    {/* Nombre del archivo */}
+                    <span className={`text-[11px] font-medium truncate ${
+                      doc.status === 'processed' ? 'text-green-900' : 'text-slate-600'
+                    }`}>
+                      {doc.name}
+                    </span>
+                  </div>
+ 
+                  <div className="flex items-center gap-2 flex-shrink-0 ml-2">
+                    {/* Etiqueta de estado */}
+                    <span className={`text-[9px] font-bold uppercase tracking-wide ${
+                      doc.status === 'processed' ? 'text-green-500' : 'text-blue-400'
+                    }`}>
+                      {doc.status === 'processed' ? 'Listo ✓' : 'Procesando...'}
+                    </span>
+ 
+                    {/* Botón eliminar */}
+                    <button
+                      onClick={(e) => { e.stopPropagation(); removeDoc(i); }}
+                      className="text-slate-300 hover:text-red-400 transition-colors"
+                    >
+                      <X size={13} />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
       </div>
-    )}
-  </section>
-</div>
+
 
     {/* Panel Derecho (Explorador) */}
     <div className="lg:col-span-8">
