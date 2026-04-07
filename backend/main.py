@@ -9,9 +9,11 @@ from tools.github_tool import get_repo_files, get_file_content
 from schemas import ConsolidatedReport
 from utils import consolidate_results
 from services.llm_service import analyze_with_llm, LLMTimeoutError, LLMServiceError
+from workspace_manager import VirtualWorkspace # Tu archivo nuevo
 
 load_dotenv()
 
+# UNA SOLA INICIALIZACIÓN DE LA APP
 app = FastAPI(title="Code Auditor API", version="5.0.0")
 
 app.add_middleware(
@@ -22,15 +24,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Carpeta para documentos subidos por el usuario
+# Instanciamos nuestra memoria global
+workspace = VirtualWorkspace()
+
 UPLOAD_DIR = "uploads"
 if not os.path.exists(UPLOAD_DIR):
     os.makedirs(UPLOAD_DIR)
 
-
 class RepoRequest(BaseModel):
     repo_url: str
     selected_files: list[str] = Field(default_factory=list)
+    # 🧠 NUEVO: Agregamos el diccionario que manda la nueva matriz de Joshua
+    selected_files_by_category: dict = Field(default_factory=dict) 
     llm_mode: str = "success"  # success | timeout | error
 
 
@@ -58,15 +63,6 @@ def get_files(request: RepoRequest):
 
 @app.post("/analyze", response_model=ConsolidatedReport)
 def analyze(request: RepoRequest):
-    """
-    Sprint 4:
-    Manejo de errores y casos edge:
-    - repos grandes
-    - archivos binarios
-    - archivos demasiado grandes
-    - errores parciales por archivo
-    - error/timeout del LLM simulado
-    """
     if not request.selected_files:
         raise HTTPException(
             status_code=400,
@@ -74,24 +70,26 @@ def analyze(request: RepoRequest):
         )
 
     MAX_FILES_PER_ANALYSIS = 10
-
     if len(request.selected_files) > MAX_FILES_PER_ANALYSIS:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"Has seleccionado demasiados archivos. "
-                f"El máximo permitido por análisis es {MAX_FILES_PER_ANALYSIS}."
-            )
-        )
+        raise HTTPException(status_code=400, detail="Demasiados archivos.")
 
     ai_responses = []
     skipped_files = []
+    
+    # 🧠 TU TAREA: Nace la sesión del Workspace
+    session_id = workspace.create_session()
 
     try:
         for file_path in request.selected_files:
             try:
+                # 1. Descargas el archivo de GitHub
                 file_data = get_file_content(request.repo_url, file_path)
 
+                # 🧠 TU TAREA: Guardas el código original en la memoria virtual
+                workspace.add_file(session_id, file_path, file_data["content"])
+
+                # Espía en consola
+                print(f"✅ Archivo {file_path} guardado en el Workspace {session_id}")
                 # 🕵️‍♂️ EL ESPÍA: Imprimimos en la consola lo que se descargó
                 print("\n" + "=" * 50)
                 print(f"📄 ARCHIVO: {file_path}")
