@@ -76,7 +76,7 @@ def analyze(request: RepoRequest):
     ai_responses = []
     skipped_files = []
     
-    # 🧠 TU TAREA: Nace la sesión del Workspace
+    # Nace la sesión del Workspace
     session_id = workspace.create_session()
 
     try:
@@ -85,7 +85,7 @@ def analyze(request: RepoRequest):
                 # 1. Descargas el archivo de GitHub
                 file_data = get_file_content(request.repo_url, file_path)
 
-                # 🧠 TU TAREA: Guardas el código original en la memoria virtual
+                # Guardas el código original en la memoria virtual
                 workspace.add_file(session_id, file_path, file_data["content"])
 
                 # Espía en consola
