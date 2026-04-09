@@ -9,21 +9,13 @@ from tools.github_tool import get_repo_files, get_file_content
 from schemas import ConsolidatedReport
 from utils import consolidate_results
 from services.llm_service import analyze_with_llm, LLMTimeoutError, LLMServiceError
-from workspace_manager import VirtualWorkspace  # Tu archivo nuevo
-
-# Sprint 6
-from services.session_manager import (
-    create_session,
-    get_session,
-    update_session_result,
-    list_sessions,
-    update_session_status,
-)
+from workspace_manager import VirtualWorkspace # Tu archivo nuevo
+from sandbox import sandbox_check, SandboxViolation
 
 load_dotenv()
 
 # UNA SOLA INICIALIZACIÓN DE LA APP
-app = FastAPI(title="Code Auditor API", version="6.0.0")
+app = FastAPI(title="Code Auditor API", version="5.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -40,66 +32,17 @@ UPLOAD_DIR = "uploads"
 if not os.path.exists(UPLOAD_DIR):
     os.makedirs(UPLOAD_DIR)
 
-
 class RepoRequest(BaseModel):
     repo_url: str
     selected_files: list[str] = Field(default_factory=list)
     # 🧠 NUEVO: Agregamos el diccionario que manda la nueva matriz de Joshua
-    selected_files_by_category: dict = Field(default_factory=dict)
+    selected_files_by_category: dict = Field(default_factory=dict) 
     llm_mode: str = "success"  # success | timeout | error
-    # Sprint 6: opcionalmente puede venir una sesión ya creada
-    session_id: str | None = None
 
 
 @app.get("/")
 def root():
     return {"message": "Code Auditor API is running ✅"}
-
-
-# =========================
-# Sprint 6 - Session Manager
-# =========================
-
-@app.post("/audit/start")
-def start_audit(request: RepoRequest):
-    """
-    Crea una nueva sesión de auditoría.
-    """
-    session = create_session(
-        repo_url=request.repo_url,
-        selected_files=request.selected_files,
-        selected_files_by_category=request.selected_files_by_category
-    )
-
-    return {
-        "message": "Sesión de auditoría creada correctamente",
-        "session": session
-    }
-
-
-@app.get("/audit/{session_id}")
-def get_audit(session_id: str):
-    """
-    Obtiene una sesión específica por su ID.
-    """
-    session = get_session(session_id)
-
-    if not session:
-        raise HTTPException(status_code=404, detail="Sesión no encontrada")
-
-    return session
-
-
-@app.get("/audit")
-def get_all_audits():
-    """
-    Lista todas las sesiones de auditoría creadas.
-    """
-    sessions = list_sessions()
-    return {
-        "total": len(sessions),
-        "sessions": sessions
-    }
 
 
 @app.post("/files")
@@ -133,31 +76,9 @@ def analyze(request: RepoRequest):
 
     ai_responses = []
     skipped_files = []
-
-    # Sprint 6:
-    # Si ya viene session_id, usamos esa sesión.
-    # Si no viene, se crea una nueva automáticamente.
-    current_session_id = request.session_id
-
-    if current_session_id:
-        existing_session = get_session(current_session_id)
-        if not existing_session:
-            raise HTTPException(
-                status_code=404,
-                detail="La sesión de auditoría proporcionada no existe."
-            )
-        update_session_status(current_session_id, "running")
-    else:
-        session = create_session(
-            repo_url=request.repo_url,
-            selected_files=request.selected_files,
-            selected_files_by_category=request.selected_files_by_category
-        )
-        current_session_id = session["session_id"]
-        update_session_status(current_session_id, "running")
-
-    # Nace la sesión del Workspace
-    workspace_session_id = workspace.create_session()
+    
+    # 🧠 TU TAREA: Nace la sesión del Workspace
+    session_id = workspace.create_session()
 
     try:
         for file_path in request.selected_files:
@@ -165,24 +86,35 @@ def analyze(request: RepoRequest):
                 # 1. Descargas el archivo de GitHub
                 file_data = get_file_content(request.repo_url, file_path)
 
-                # Guardas el código original en la memoria virtual
-                workspace.add_file(workspace_session_id, file_path, file_data["content"])
+                # 🧠 TU TAREA: Guardas el código original en la memoria virtual
+                workspace.add_file(session_id, file_path, file_data["content"])
 
                 # Espía en consola
-                print(f"✅ Archivo {file_path} guardado en el Workspace {workspace_session_id}")
+                print(f"✅ Archivo {file_path} guardado en el Workspace {session_id}")
+                # 🕵️‍♂️ EL ESPÍA: Imprimimos en la consola lo que se descargó
                 print("\n" + "=" * 50)
                 print(f"📄 ARCHIVO: {file_path}")
                 print(f"📏 TAMAÑO: {len(file_data['content'])} caracteres")
                 print(f"📦 CONTENIDO CRUDO (Primeros 150 caracteres):\n{file_data['content'][:150]}...")
                 print("=" * 50 + "\n")
 
+                # 🛡️ SANDBOX: Verificar seguridad antes de mandar al LLM
+                contenido_seguro = sandbox_check(file_path, file_data["content"])
+
                 llm_result = analyze_with_llm(
                     file_path=file_path,
-                    file_content=file_data["content"],
+                    file_content=contenido_seguro,
                     mode=request.llm_mode
                 )
 
                 ai_responses.append(llm_result)
+
+            except SandboxViolation as sandbox_error:
+                print(f"🛡️  [SANDBOX] Archivo bloqueado: {file_path} — {str(sandbox_error)}")
+                skipped_files.append({
+                    "file_path": file_path,
+                    "reason": str(sandbox_error)
+                })
 
             except ValueError as file_error:
                 skipped_files.append({
@@ -198,7 +130,6 @@ def analyze(request: RepoRequest):
                 })
 
         if not ai_responses and skipped_files:
-            update_session_status(current_session_id, "failed")
             raise HTTPException(
                 status_code=422,
                 detail=(
@@ -214,20 +145,15 @@ def analyze(request: RepoRequest):
             skipped_files=skipped_files
         )
 
-        # Sprint 6: guardar resultado en la sesión
-        update_session_result(current_session_id, reporte_final)
-
         return reporte_final
 
     except LLMTimeoutError as e:
-        update_session_status(current_session_id, "failed")
         raise HTTPException(
             status_code=504,
             detail=f"Error de timeout al comunicarse con el LLM: {str(e)}"
         )
 
     except LLMServiceError as e:
-        update_session_status(current_session_id, "failed")
         raise HTTPException(
             status_code=503,
             detail=f"Error del servicio LLM: {str(e)}"
@@ -237,7 +163,6 @@ def analyze(request: RepoRequest):
         raise
 
     except Exception as e:
-        update_session_status(current_session_id, "failed")
         raise HTTPException(
             status_code=500,
             detail=f"Error interno durante el análisis: {str(e)}"
