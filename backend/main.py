@@ -4,11 +4,12 @@ from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 from datetime import datetime
 import os
+import requests # 🧠 NUEVO: Necesario para hablar con la API de Azure de Jorge
 
 from tools.github_tool import get_repo_files, get_file_content
 from schemas import ConsolidatedReport
 from utils import consolidate_results
-from services.llm_service import analyze_with_llm, LLMTimeoutError, LLMServiceError
+from services.llm_service import analizar_con_ia_externa 
 from workspace_manager import VirtualWorkspace # Tu archivo nuevo
 
 load_dotenv()
@@ -27,6 +28,13 @@ app.add_middleware(
 # Instanciamos nuestra memoria global
 workspace = VirtualWorkspace()
 
+URLS_IA = {
+    "security": os.getenv("IA_SECURITY_URL", "https://linterlogicai.azurewebsites.net/api/security"),
+    "business_rules": os.getenv("IA_RULES_URL", ""), # 🚧 Pendiente de Jorge
+    "software_logic": os.getenv("IA_LOGIC_URL", ""), # 🚧 Pendiente de Jorge
+    "best_practices": os.getenv("IA_PRACTICES_URL", "") # 🚧 Pendiente de Jorge
+}
+
 UPLOAD_DIR = "uploads"
 if not os.path.exists(UPLOAD_DIR):
     os.makedirs(UPLOAD_DIR)
@@ -34,7 +42,7 @@ if not os.path.exists(UPLOAD_DIR):
 class RepoRequest(BaseModel):
     repo_url: str
     selected_files: list[str] = Field(default_factory=list)
-    # 🧠 NUEVO: Agregamos el diccionario que manda la nueva matriz de Joshua
+    # 🧠 Matriz de Joshua/Nadia
     selected_files_by_category: dict = Field(default_factory=dict) 
     llm_mode: str = "success"  # success | timeout | error
 
@@ -60,7 +68,6 @@ def get_files(request: RepoRequest):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-
 @app.post("/analyze", response_model=ConsolidatedReport)
 def analyze(request: RepoRequest):
     if not request.selected_files:
@@ -85,25 +92,41 @@ def analyze(request: RepoRequest):
                 # 1. Descargas el archivo de GitHub
                 file_data = get_file_content(request.repo_url, file_path)
 
-                # Guardas el código original en la memoria virtual
+                # 2. Guardas el código original en la memoria virtual
                 workspace.add_file(session_id, file_path, file_data["content"])
-
-                # Espía en consola
                 print(f"✅ Archivo {file_path} guardado en el Workspace {session_id}")
-                # 🕵️‍♂️ EL ESPÍA: Imprimimos en la consola lo que se descargó
-                print("\n" + "=" * 50)
-                print(f"📄 ARCHIVO: {file_path}")
-                print(f"📏 TAMAÑO: {len(file_data['content'])} caracteres")
-                print(f"📦 CONTENIDO CRUDO (Primeros 150 caracteres):\n{file_data['content'][:150]}...")
-                print("=" * 50 + "\n")
 
-                llm_result = analyze_with_llm(
-                    file_path=file_path,
-                    file_content=file_data["content"],
-                    mode=request.llm_mode
-                )
+                findings_del_archivo = []
 
-                ai_responses.append(llm_result)
+                for categoria, archivos_marcados in request.selected_files_by_category.items():
+                    if file_path in archivos_marcados:
+                        url_destino = URLS_IA.get(categoria)
+                        
+                        if url_destino:
+                            # ✅ La API existe (ej. Seguridad). Disparamos a Azure.
+                            print(f"🚀 Analizando {categoria} en Azure para: {file_path}")
+                            hallazgos = analizar_con_ia_externa(session_id, file_path, workspace, url_destino, categoria)
+                            findings_del_archivo.extend(hallazgos)
+                        else:
+                            # 🚧 La API no existe aún. Mandamos un Mock al frontend.
+                            print(f"🚧 Categoría {categoria} en construcción. Simulando respuesta.")
+                            findings_del_archivo.append({
+                                "file_path": file_path,
+                                "type": categoria,
+                                "severity": "info",
+                                "title": f"Análisis de {categoria} Pendiente",
+                                "description": f"El equipo de IA (Jorge) aún está preparando el modelo para '{categoria}'.",
+                                "recommendation": "Esta es una respuesta simulada para que puedas probar la interfaz de React sin que el sistema falle.",
+                                "original_code": "# Código en espera de análisis...",
+                                "secure_code": "# Código en espera de análisis...",
+                                "line": 0
+                            })
+
+                # Agrupamos todos los hallazgos de este archivo
+                ai_responses.append({
+                    "file_path": file_path,
+                    "findings": findings_del_archivo
+                })
 
             except ValueError as file_error:
                 skipped_files.append({
@@ -112,7 +135,7 @@ def analyze(request: RepoRequest):
                 })
 
             except Exception as file_error:
-                print(f"🛑 ERROR REAL AL CONECTAR CON JORGE: {str(file_error)}")
+                print(f"🛑 ERROR REAL AL PROCESAR ARCHIVO: {str(file_error)}")
                 skipped_files.append({
                     "file_path": file_path,
                     "reason": f"Error inesperado al procesar archivo: {str(file_error)}"
@@ -156,7 +179,6 @@ def analyze(request: RepoRequest):
             status_code=500,
             detail=f"Error interno durante el análisis: {str(e)}"
         )
-
 
 @app.post("/upload-doc")
 async def upload_doc(file: UploadFile = File(...)):
