@@ -4,13 +4,14 @@ from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 from datetime import datetime
 import os
-import requests # 🧠 NUEVO: Necesario para hablar con la API de Azure de Jorge
+import requests 
 
 from tools.github_tool import get_repo_files, get_file_content
 from schemas import ConsolidatedReport
 from utils import consolidate_results
-from services.llm_service import analizar_con_ia_externa 
-from workspace_manager import VirtualWorkspace # Tu archivo nuevo
+from services.llm_service import analizar_con_ia_externa, LLMTimeoutError, LLMServiceError
+from workspace_manager import VirtualWorkspace 
+from sandbox import sandbox_check, SandboxViolation
 
 load_dotenv()
 
@@ -30,9 +31,9 @@ workspace = VirtualWorkspace()
 
 URLS_IA = {
     "security": os.getenv("IA_SECURITY_URL", "https://linterlogicai.azurewebsites.net/api/security"),
-    "business_rules": os.getenv("IA_RULES_URL", ""), # 🚧 Pendiente de Jorge
-    "software_logic": os.getenv("IA_LOGIC_URL", ""), # 🚧 Pendiente de Jorge
-    "best_practices": os.getenv("IA_PRACTICES_URL", "") # 🚧 Pendiente de Jorge
+    "business_rules": os.getenv("IA_RULES_URL", ""), 
+    "software_logic": os.getenv("IA_LOGIC_URL", ""), 
+    "best_practices": os.getenv("IA_PRACTICES_URL", "") 
 }
 
 UPLOAD_DIR = "uploads"
@@ -42,9 +43,8 @@ if not os.path.exists(UPLOAD_DIR):
 class RepoRequest(BaseModel):
     repo_url: str
     selected_files: list[str] = Field(default_factory=list)
-    # 🧠 Matriz de Joshua/Nadia
     selected_files_by_category: dict = Field(default_factory=dict) 
-    llm_mode: str = "success"  # success | timeout | error
+    llm_mode: str = "success" 
 
 
 @app.get("/")
@@ -54,10 +54,6 @@ def root():
 
 @app.post("/files")
 def get_files(request: RepoRequest):
-    """
-    Devuelve la lista de archivos analizables de un repositorio.
-    Excluye carpetas irrelevantes y binarios conocidos.
-    """
     try:
         files = get_repo_files(request.repo_url)
         return {
@@ -92,23 +88,25 @@ def analyze(request: RepoRequest):
                 # 1. Descargas el archivo de GitHub
                 file_data = get_file_content(request.repo_url, file_path)
 
-                # 2. Guardas el código original en la memoria virtual
-                workspace.add_file(session_id, file_path, file_data["content"])
+                # 🛡️ SANDBOX (El cambio de tu compañero): Verificar seguridad antes de guardar
+                contenido_seguro = sandbox_check(file_path, file_data["content"])
+
+                # 2. Guardas el código SEGURO en la memoria virtual (Tu cambio)
+                workspace.add_file(session_id, file_path, contenido_seguro)
                 print(f"✅ Archivo {file_path} guardado en el Workspace {session_id}")
 
                 findings_del_archivo = []
 
+                # 🧠 EL ENRUTADOR INTELIGENTE (Tu cambio)
                 for categoria, archivos_marcados in request.selected_files_by_category.items():
                     if file_path in archivos_marcados:
                         url_destino = URLS_IA.get(categoria)
                         
                         if url_destino:
-                            # ✅ La API existe (ej. Seguridad). Disparamos a Azure.
                             print(f"🚀 Analizando {categoria} en Azure para: {file_path}")
                             hallazgos = analizar_con_ia_externa(session_id, file_path, workspace, url_destino, categoria)
                             findings_del_archivo.extend(hallazgos)
                         else:
-                            # 🚧 La API no existe aún. Mandamos un Mock al frontend.
                             print(f"🚧 Categoría {categoria} en construcción. Simulando respuesta.")
                             findings_del_archivo.append({
                                 "file_path": file_path,
@@ -116,16 +114,22 @@ def analyze(request: RepoRequest):
                                 "severity": "info",
                                 "title": f"Análisis de {categoria} Pendiente",
                                 "description": f"El equipo de IA (Jorge) aún está preparando el modelo para '{categoria}'.",
-                                "recommendation": "Esta es una respuesta simulada para que puedas probar la interfaz de React sin que el sistema falle.",
+                                "recommendation": "Esta es una respuesta simulada para probar la interfaz sin que el sistema falle.",
                                 "original_code": "# Código en espera de análisis...",
                                 "secure_code": "# Código en espera de análisis...",
                                 "line": 0
                             })
 
-                # Agrupamos todos los hallazgos de este archivo
                 ai_responses.append({
                     "file_path": file_path,
                     "findings": findings_del_archivo
+                })
+
+            except SandboxViolation as sandbox_error:
+                print(f"🛡️  [SANDBOX] Archivo bloqueado: {file_path} — {str(sandbox_error)}")
+                skipped_files.append({
+                    "file_path": file_path,
+                    "reason": str(sandbox_error)
                 })
 
             except ValueError as file_error:
@@ -144,11 +148,7 @@ def analyze(request: RepoRequest):
         if not ai_responses and skipped_files:
             raise HTTPException(
                 status_code=422,
-                detail=(
-                    "Ningún archivo pudo ser analizado. "
-                    "Todos fueron omitidos por ser inválidos, binarios, "
-                    "demasiado grandes o no legibles."
-                )
+                detail="Ningún archivo pudo ser analizado. Todos fueron omitidos por ser inválidos o bloqueados."
             )
 
         reporte_final = consolidate_results(
@@ -164,61 +164,42 @@ def analyze(request: RepoRequest):
             status_code=504,
             detail=f"Error de timeout al comunicarse con el LLM: {str(e)}"
         )
-
     except LLMServiceError as e:
         raise HTTPException(
             status_code=503,
             detail=f"Error del servicio LLM: {str(e)}"
         )
-
     except HTTPException:
         raise
-
     except Exception as e:
         raise HTTPException(
             status_code=500,
             detail=f"Error interno durante el análisis: {str(e)}"
         )
 
+
 @app.post("/upload-doc")
 async def upload_doc(file: UploadFile = File(...)):
-    """
-    Sprint 5:
-    Endpoint para recibir documentos del usuario, validarlos
-    y almacenarlos en el servidor.
-    """
     try:
         allowed_extensions = [".pdf", ".txt", ".docx"]
-        max_file_size_bytes = 5 * 1024 * 1024  # 5 MB
+        max_file_size_bytes = 5 * 1024 * 1024 
 
         if not file.filename:
-            raise HTTPException(
-                status_code=400,
-                detail="No se recibió ningún archivo válido."
-            )
+            raise HTTPException(status_code=400, detail="No se recibió ningún archivo válido.")
 
         original_filename = file.filename
         extension = os.path.splitext(original_filename)[1].lower()
 
         if extension not in allowed_extensions:
-            raise HTTPException(
-                status_code=400,
-                detail="Tipo de archivo no permitido. Solo se aceptan PDF, TXT y DOCX."
-            )
+            raise HTTPException(status_code=400, detail="Tipo de archivo no permitido.")
 
         content = await file.read()
 
         if not content:
-            raise HTTPException(
-                status_code=400,
-                detail="El archivo está vacío."
-            )
+            raise HTTPException(status_code=400, detail="El archivo está vacío.")
 
         if len(content) > max_file_size_bytes:
-            raise HTTPException(
-                status_code=400,
-                detail=f"El archivo excede el tamaño máximo permitido de {max_file_size_bytes} bytes."
-            )
+            raise HTTPException(status_code=400, detail="El archivo excede el tamaño máximo.")
 
         timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
         safe_filename = original_filename.replace(" ", "_")
@@ -227,14 +208,6 @@ async def upload_doc(file: UploadFile = File(...)):
 
         with open(file_path, "wb") as buffer:
             buffer.write(content)
-
-        print("\n" + "=" * 50)
-        print("📥 DOCUMENTO RECIBIDO")
-        print(f"📄 NOMBRE ORIGINAL: {original_filename}")
-        print(f"🆕 NOMBRE GUARDADO: {new_filename}")
-        print(f"📏 TAMAÑO: {len(content)} bytes")
-        print(f"📂 RUTA: {file_path}")
-        print("=" * 50 + "\n")
 
         return {
             "message": "Archivo subido correctamente",
@@ -247,9 +220,5 @@ async def upload_doc(file: UploadFile = File(...)):
 
     except HTTPException:
         raise
-
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error al subir el archivo: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"Error al subir el archivo: {str(e)}")
