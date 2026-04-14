@@ -703,38 +703,70 @@ const App = () => {
 
     return (
       <div className="max-w-7xl mx-auto w-full space-y-6 animate-in fade-in">
-        <div className="bg-white rounded-3xl shadow-sm border border-slate-100 overflow-hidden p-6 flex justify-between items-center">
-           <div>
-              <h2 className="text-xl font-black text-slate-800 tracking-tight">Revisión Guiada del Análisis</h2>
-              <p className="text-slate-400 text-sm mt-0.5">Evalúa individualmente cada hallazgo detectado.</p>
-           </div>
-           <ScoreRing score={analysisResult.total_score || 100} />
+        <div className="bg-[#0f172a] rounded-3xl shadow-lg overflow-hidden p-8 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+          <div>
+            <h2 className="text-2xl font-black text-white tracking-tight">Revisión Guiada del Análisis</h2>
+            <p className="text-slate-400 text-sm mt-1">Evalúa cada aspecto y decide si aceptas los cambios sugeridos</p>
+          </div>
+          <div className="flex items-center gap-2 text-sm font-bold text-slate-400 bg-slate-800/50 px-4 py-2 rounded-xl">
+            {/* 🛠️ AQUÍ ESTABA EL ERROR: Ahora contamos las categorías completadas usando la función correcta */}
+            <span className="text-white">{ANALYSIS_CATEGORIES.filter(c => isCategoryCompleted(c.id)).length}</span>
+            <span>/</span>
+            <span>{ANALYSIS_CATEGORIES.length} aspectos revisados</span>
+          </div>
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
           <aside className="lg:col-span-4">
-            <div className="bg-white rounded-3xl border border-slate-100 p-5 space-y-3 sticky top-24">
-              <h3 className="text-[11px] font-black text-slate-400 uppercase tracking-[0.2em] mb-4">Fases de Revisión</h3>
+            <div className="bg-transparent space-y-4 sticky top-24">
+              <h3 className="text-[11px] font-black text-slate-400 uppercase tracking-[0.2em] mb-2 px-1">Submenú de Revisión</h3>
               
               {ANALYSIS_CATEGORIES.map((category, index) => {
                 const isActive = currentReviewIndex === index;
                 const isDone = isCategoryCompleted(category.id);
+                // Calculamos cuántos hallazgos tiene esta categoría
+                const categoryFindingsCount = (findingsByCategory[category.id] || []).length;
                 
                 return (
                   <button key={category.id} type="button" onClick={() => setCurrentReviewIndex(index)}
-                    className={`w-full text-left rounded-2xl border p-4 transition-all ${
-                      isActive ? 'border-blue-400 bg-blue-50 shadow-md' : 'border-slate-200 bg-white hover:border-slate-300'
+                    className={`w-full text-left rounded-[1.5rem] border p-5 transition-all ${
+                      isActive ? 'border-blue-300 bg-blue-50/50 shadow-sm' : 
+                      isDone ? 'border-slate-200 bg-white' : 'border-slate-200 bg-white/60 opacity-70 hover:border-slate-300'
                     }`}>
-                    <div className="flex items-start justify-between">
+                    <div className="flex items-start justify-between mb-3">
                       <div>
-                        <p className="text-[9px] font-black uppercase text-slate-400">Paso {index + 1}</p>
-                        <h4 className="text-sm font-bold text-slate-800">{category.label}</h4>
+                        <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1">Aspecto {index + 1}</p>
+                        <h4 className={`text-base font-bold leading-tight ${isActive ? 'text-slate-800' : 'text-slate-600'}`}>
+                          {category.label}
+                        </h4>
                       </div>
+                      
+                      {/* Badges de estado (Actual / Completado) */}
                       {isDone ? (
-                        <CheckCircle size={18} className="text-green-500" />
+                        <span className="text-[9px] font-black uppercase px-2 py-1 rounded-lg bg-green-100 text-green-700 flex-shrink-0">
+                          Completado
+                        </span>
                       ) : isActive ? (
-                        <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse" />
+                        <span className="text-[9px] font-black uppercase px-2 py-1 rounded-lg bg-blue-100 text-blue-600 flex-shrink-0">
+                          Actual
+                        </span>
                       ) : null}
+                    </div>
+
+                    {/* Ícono de cantidad y Barra de progreso */}
+                    <div className="mt-4">
+                      <div className="flex items-center gap-1.5 text-xs font-bold text-slate-500 mb-3">
+                        <Info size={14} className={isActive ? "text-blue-500" : "text-slate-400"} />
+                        <span>{categoryFindingsCount}</span>
+                      </div>
+                      <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                        <div 
+                          className={`h-full rounded-full transition-all duration-500 ${
+                            isDone ? 'bg-green-500 w-full' : 
+                            isActive ? 'bg-blue-500 w-1/3 animate-pulse' : 'w-0'
+                          }`} 
+                        />
+                      </div>
                     </div>
                   </button>
                 );
@@ -847,7 +879,7 @@ const App = () => {
                       ) : (
                         <Zap size={18} />
                       )}
-                      {isSendingToBackend ? 'Aplicando Parches...' : 'Aplicar Cambios en Backend'}
+                      {isSendingToBackend ? 'Aplicando Parches...' : 'Aplicar Cambios'}
                     </button>
                   </div>
                   
