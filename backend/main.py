@@ -55,6 +55,11 @@ class ApprovedFinding(BaseModel):
 class ApplyPatchesRequest(BaseModel):
     session_id: str
     approved_findings: list[ApprovedFinding] # Sintaxis moderna
+    
+class StepAnalyzeRequest(BaseModel):
+    session_id: str
+    file_paths: list[str]  # Los archivos que se van a analizar en este paso
+    categoria: str         # ej. "security", "business_rules", etc.
 
 @app.get("/")
 def root():
@@ -233,3 +238,81 @@ async def upload_doc(file: UploadFile = File(...)):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error al subir el archivo: {str(e)}")
+
+@app.post("/analyze/step")
+def analyze_step(request: StepAnalyzeRequest):
+    """
+    Analiza una lista de archivos para UNA SOLA categoría específica.
+    Ideal para flujos de revisión secuencial (Wizard).
+    """
+    # 1. Verificamos que la categoría exista en nuestro diccionario de URLs
+    url_destino = URLS_IA.get(request.categoria)
+    
+    if url_destino is None:
+         raise HTTPException(
+             status_code=400, 
+             detail=f"Categoría '{request.categoria}' no es válida o no está configurada."
+         )
+
+    hallazgos_del_paso = []
+    archivos_omitidos = []
+
+    try:
+        # 2. Recorremos solo los archivos que el frontend nos pidió
+        for file_path in request.file_paths:
+            try:
+                # Verificamos que el archivo exista en la RAM antes de enviarlo
+                # Si falla, lanzará ValueError y se irá al except de abajo
+                codigo_en_ram = workspace.get_file(request.session_id, file_path)
+                
+                if url_destino == "":
+                    # 🚧 MOCK: La API de Jorge para esta categoría aún no existe
+                    print(f"🚧 {request.categoria} en construcción. Mockeando: {file_path}")
+                    hallazgos_del_paso.append({
+                        "file_path": file_path,
+                        "type": request.categoria,
+                        "severity": "info",
+                        "title": f"Análisis de {request.categoria} Pendiente",
+                        "description": "El modelo de IA para esta etapa aún está en desarrollo por el equipo.",
+                        "recommendation": "Respuesta simulada para mantener el flujo del sistema.",
+                        "original_code": "# Código actual...",
+                        "secure_code": "# Código actual...",
+                        "line": 0
+                    })
+                else:
+                    # 🚀 LLAMADA REAL A AZURE
+                    print(f"🚀 Disparando IA ({request.categoria}) para: {file_path}")
+                    nuevos_hallazgos = analizar_con_ia_externa(
+                        request.session_id, 
+                        file_path, 
+                        workspace, 
+                        url_destino, 
+                        request.categoria
+                    )
+                    hallazgos_del_paso.extend(nuevos_hallazgos)
+
+            except ValueError:
+                archivos_omitidos.append({
+                    "file_path": file_path, 
+                    "reason": "El archivo no está cargado en el Virtual Workspace de esta sesión."
+                })
+            except Exception as e:
+                archivos_omitidos.append({
+                    "file_path": file_path, 
+                    "reason": f"Error al procesar: {str(e)}"
+                })
+
+        # 3. Empaquetamos la respuesta para Joshua
+        return {
+            "session_id": request.session_id,
+            "categoria_analizada": request.categoria,
+            "hallazgos": hallazgos_del_paso,
+            "omitidos": archivos_omitidos
+        }
+
+    except Exception as e:
+        print(f"🛑 ERROR EN /analyze/step: {str(e)}")
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Error interno durante el análisis del paso: {str(e)}"
+        )
