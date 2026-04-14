@@ -28,7 +28,7 @@ const createEmptyCategorySelection = () =>
     return acc;
   }, {});
 
-// ── WIZARD STEP INDICATOR (DE NADIA) ───────────────────────────────────────
+// ── WIZARD STEP INDICATOR ──────────────────────────────────────────────────
 const WizardBar = ({ currentStep }) => {
   const steps = [
     { id: 1, label: 'Conectar Repositorio', icon: Github },
@@ -94,6 +94,29 @@ const WizardBar = ({ currentStep }) => {
   );
 };
 
+// ── SCORE RING ─────────────────────────────────────────────────────────────
+const ScoreRing = ({ score }) => {
+  const radius = 40;
+  const circumference = 2 * Math.PI * radius;
+  const offset = circumference - (score / 100) * circumference;
+  const color = score >= 80 ? '#22c55e' : score >= 60 ? '#f59e0b' : '#ef4444';
+
+  return (
+    <div className="relative w-28 h-28 flex items-center justify-center">
+      <svg className="absolute inset-0 -rotate-90" width="112" height="112" viewBox="0 0 112 112">
+        <circle cx="56" cy="56" r={radius} fill="none" stroke="#f1f5f9" strokeWidth="10" />
+        <circle cx="56" cy="56" r={radius} fill="none" stroke={color} strokeWidth="10"
+          strokeDasharray={circumference} strokeDashoffset={offset}
+          strokeLinecap="round" style={{ transition: 'stroke-dashoffset 1s ease' }} />
+      </svg>
+      <div className="text-center z-10">
+        <span className="text-2xl font-black" style={{ color }}>{score}</span>
+        <span className="text-xs text-slate-400 block -mt-1">/100</span>
+      </div>
+    </div>
+  );
+};
+
 // ── APP ────────────────────────────────────────────────────────────────────
 const App = () => {
   const [view, setView] = useState('setup'); 
@@ -108,11 +131,16 @@ const App = () => {
   const [filterSeverity, setFilterSeverity] = useState('all');
   const [filterType, setFilterType] = useState('all');
   const [uploadedDocs, setUploadedDocs] = useState([]);
-  const [uploadReviewType] = useState('documentation');
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
-  const [currentReviewIndex, setCurrentReviewIndex] = useState(0);
-  const [reviewDecisions, setReviewDecisions] = useState({});
   const fileInputRef = useRef(null);
+
+  // 🧠 NUEVOS ESTADOS PARA APROBACIÓN GRANULAR
+  const [currentReviewIndex, setCurrentReviewIndex] = useState(0);
+  const [findingDecisions, setFindingDecisions] = useState({});
+  const [isSendingToBackend, setIsSendingToBackend] = useState(false);
+
+  // Generador de IDs únicos para cada hallazgo
+  const getFindingId = (finding, index) => `${finding.file_path}-${finding.type}-${index}`;
 
   // ── MEMOS ──
   const filteredFindings = useMemo(() => {
@@ -204,12 +232,20 @@ const App = () => {
     });
   }, [currentReviewCategory, findingsByCategory, filterSeverity, filterType]);
 
-  const reviewCompleted = useMemo(
-    () => ANALYSIS_CATEGORIES.every(category => reviewDecisions[category.id]),
-    [reviewDecisions]
-  );
+  // Verifica si todos los hallazgos de una categoría ya tienen decisión
+  const isCategoryCompleted = (categoryId) => {
+    const findings = findingsByCategory[categoryId] || [];
+    if (findings.length === 0) return true;
+    return findings.every((f, i) => findingDecisions[getFindingId(f, i)] !== undefined);
+  };
 
-  // ── FUNCIONES DE CONEXIÓN Y ANÁLISIS ──
+  // Verifica si TODO el reporte está completado
+  const reviewCompleted = useMemo(() => {
+    return ANALYSIS_CATEGORIES.every(c => isCategoryCompleted(c.id));
+  }, [findingDecisions, findingsByCategory]);
+
+
+  // ── FUNCIONES DE CONEXIÓN ──
   const handleConnect = async () => {
     if (!repoUrl) {
       alert("⚠️ Por favor, ingresa una URL de GitHub primero.");
@@ -236,7 +272,7 @@ const App = () => {
 
       setRepoFiles(archivosMapeados);
       setSelectedFileMatrix(createEmptyCategorySelection());
-      setWizardStep(2); // Avanzamos al Paso 2
+      setWizardStep(2);
     } catch (err) {
       console.error(err);
       setError("No se pudo conectar con el backend. Verifica que la URL sea válida.");
@@ -256,7 +292,7 @@ const App = () => {
     if (uniqueSelectedFiles.length === 0) return;
     
     setView('analyzing');
-    setWizardStep(3); // Visualizamos el paso 3
+    setWizardStep(3);
     setError(null);
 
     try {
@@ -266,7 +302,7 @@ const App = () => {
         body: JSON.stringify({
           repo_url: repoUrl,
           selected_files: uniqueSelectedFiles,
-          selected_files_by_category: selectedFilesByCategory, // ¡El JSON correcto para tu backend!
+          selected_files_by_category: selectedFilesByCategory,
         }),
       });
 
@@ -275,7 +311,7 @@ const App = () => {
       const data = await response.json();
       setAnalysisResult(data);
       setCurrentReviewIndex(0);
-      setReviewDecisions({});
+      setFindingDecisions({});
       setView('results');
     } catch (err) {
       console.error(err);
@@ -294,7 +330,7 @@ const App = () => {
     setAnalysisResult(null);
     setUploadedDocs([]);
     setCurrentReviewIndex(0);
-    setReviewDecisions({});
+    setFindingDecisions({});
   };
 
   // ── MATRIZ FUNCTIONS ──
@@ -337,7 +373,6 @@ const App = () => {
     });
   };
 
-  // ── DOCS FUNCTIONS ──
   const processDroppedFiles = (incomingFiles) => {
     const files = Array.from(incomingFiles || []);
     if (!files.length) return;
@@ -366,29 +401,61 @@ const App = () => {
   };
   const removeDoc = (index) => setUploadedDocs(prev => prev.filter((_, i) => i !== index));
 
-  const submitCategoryDecision = (categoryId, decision) => {
-    setReviewDecisions(prev => ({
+  // ── FUNCIONES DE DECISIÓN GRANULAR ──
+  const toggleFindingDecision = (findingId, decision) => {
+    setFindingDecisions(prev => ({
       ...prev,
-      [categoryId]: decision,
+      [findingId]: prev[findingId] === decision ? undefined : decision
     }));
+  };
 
-    const currentIndex = ANALYSIS_CATEGORIES.findIndex(category => category.id === categoryId);
-    if (currentIndex < ANALYSIS_CATEGORIES.length - 1) {
-      setCurrentReviewIndex(currentIndex + 1);
+  const advanceToNextCategory = () => {
+    if (currentReviewIndex < ANALYSIS_CATEGORIES.length - 1) {
+      setCurrentReviewIndex(currentReviewIndex + 1);
     }
   };
 
-  const goToReviewedCategory = (targetIndex) => {
-    const targetCategory = ANALYSIS_CATEGORIES[targetIndex];
-    const isAnswered = !!reviewDecisions[targetCategory.id];
-    const isCurrent = targetIndex === currentReviewIndex;
-    if (isAnswered || isCurrent || reviewCompleted) {
-      setCurrentReviewIndex(targetIndex);
+  const enviarDecisionesAlBackend = async () => {
+    const aceptados = [];
+    
+    ANALYSIS_CATEGORIES.forEach(cat => {
+      const hallazgos = findingsByCategory[cat.id] || [];
+      hallazgos.forEach((f, i) => {
+        if (findingDecisions[getFindingId(f, i)] === 'accepted') {
+          aceptados.push(f);
+        }
+      });
+    });
+
+    if (aceptados.length === 0) {
+      alert("No aceptaste ningún cambio. El Workspace se mantendrá igual.");
+      return;
+    }
+
+    setIsSendingToBackend(true);
+    try {
+      const response = await fetch("http://127.0.0.1:8000/apply-patches", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ 
+          session_id: analysisResult.session_id || "sesion-actual", 
+          approved_findings: aceptados 
+        }),
+      });
+
+      if (!response.ok) throw new Error("Error aplicando parches en la RAM");
+      
+      alert("¡Éxito! Los parches se aplicaron correctamente en el Virtual Workspace.");
+      handleReset(); 
+      
+    } catch (err) {
+      alert("Error al enviar los cambios aceptados al backend.");
+    } finally {
+      setIsSendingToBackend(false);
     }
   };
 
   // ── VISTAS ───────────────────────────────────────────────────────────────
-
   const Header = () => (
     <nav className="bg-[#0f172a] px-8 py-3 flex justify-between items-center sticky top-0 z-20 shadow-lg">
       <div className="flex items-center gap-3">
@@ -425,7 +492,6 @@ const App = () => {
     </footer>
   );
 
-  // VISTA PASO 1: CONECTAR REPO
   const Step1View = () => (
     <div className="flex justify-center items-center flex-1">
       <div className="w-full max-w-md animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -471,7 +537,6 @@ const App = () => {
     </div>
   );
 
-  // VISTA PASO 2: MATRIZ Y DOCUMENTOS
   const Step2View = () => (
     <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 max-w-[1400px] mx-auto w-full animate-in fade-in slide-in-from-bottom-4 duration-500">
       <div className="lg:col-span-4 space-y-6">
@@ -631,62 +696,45 @@ const App = () => {
     </div>
   );
 
-  // VISTA RESULTADOS: REVISION GUIADA POR CATEGORIA
   const ResultsView = () => {
     if (!analysisResult) return null;
-
     const activeCategory = currentReviewCategory || ANALYSIS_CATEGORIES[0];
-    const activeDecision = reviewDecisions[activeCategory.id];
+    const isCurrentCategoryDone = isCategoryCompleted(activeCategory.id);
 
     return (
-      <div className="max-w-7xl mx-auto w-full space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700">
-        <div className="flex flex-col lg:flex-row gap-6 items-start justify-between bg-white p-8 rounded-[2.5rem] shadow-xl shadow-slate-200/50 border border-slate-100">
-          <div className="text-left">
-            <h2 className="text-3xl font-black text-slate-900 tracking-tighter uppercase italic">Revision Guiada del Analisis</h2>
-            <p className="text-slate-400 font-medium">Evalua cada aspecto por separado y decide si aceptas o no los cambios sugeridos.</p>
-          </div>
-          <div className="flex items-center gap-4">
-            <div className="text-center">
-              <div className={`text-5xl font-black ${analysisResult.total_score > 70 ? 'text-green-500' : 'text-orange-500'}`}>
-                {analysisResult.total_score}<span className="text-xl text-slate-300">/100</span>
-              </div>
-              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">Global Score</p>
-            </div>
-            <div className="bg-slate-100 rounded-2xl px-4 py-3 border border-slate-200">
-              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Progreso</p>
-              <p className="text-lg font-bold text-slate-800">{Object.keys(reviewDecisions).length}/{ANALYSIS_CATEGORIES.length}</p>
-            </div>
-          </div>
+      <div className="max-w-7xl mx-auto w-full space-y-6 animate-in fade-in">
+        <div className="bg-white rounded-3xl shadow-sm border border-slate-100 overflow-hidden p-6 flex justify-between items-center">
+           <div>
+              <h2 className="text-xl font-black text-slate-800 tracking-tight">Revisión Guiada del Análisis</h2>
+              <p className="text-slate-400 text-sm mt-0.5">Evalúa individualmente cada hallazgo detectado.</p>
+           </div>
+           <ScoreRing score={analysisResult.total_score || 100} />
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
           <aside className="lg:col-span-4">
-            <div className="bg-white rounded-3xl border border-slate-100 shadow-sm p-5 space-y-3">
-              <h3 className="text-[11px] font-black text-slate-400 uppercase tracking-[0.2em]">Submenu de Revision</h3>
+            <div className="bg-white rounded-3xl border border-slate-100 p-5 space-y-3 sticky top-24">
+              <h3 className="text-[11px] font-black text-slate-400 uppercase tracking-[0.2em] mb-4">Fases de Revisión</h3>
+              
               {ANALYSIS_CATEGORIES.map((category, index) => {
-                const categoryFindings = findingsByCategory[category.id] || [];
-                const decision = reviewDecisions[category.id];
                 const isActive = currentReviewIndex === index;
-                const isUnlocked = !!decision || isActive || reviewCompleted;
-
+                const isDone = isCategoryCompleted(category.id);
+                
                 return (
-                  <button
-                    key={category.id}
-                    type="button"
-                    disabled={!isUnlocked}
-                    onClick={() => goToReviewedCategory(index)}
-                    className={`w-full text-left rounded-2xl border p-4 transition-all ${isActive ? 'border-blue-300 bg-blue-50 shadow-sm' : 'border-slate-200 bg-white hover:border-slate-300'} ${!isUnlocked ? 'opacity-50 cursor-not-allowed' : ''}`}
-                  >
-                    <div className="flex items-center justify-between gap-3">
+                  <button key={category.id} type="button" onClick={() => setCurrentReviewIndex(index)}
+                    className={`w-full text-left rounded-2xl border p-4 transition-all ${
+                      isActive ? 'border-blue-400 bg-blue-50 shadow-md' : 'border-slate-200 bg-white hover:border-slate-300'
+                    }`}>
+                    <div className="flex items-start justify-between">
                       <div>
-                        <p className="text-xs font-black uppercase tracking-wide text-slate-400">Aspecto {index + 1}</p>
+                        <p className="text-[9px] font-black uppercase text-slate-400">Paso {index + 1}</p>
                         <h4 className="text-sm font-bold text-slate-800">{category.label}</h4>
                       </div>
-                      <span className="text-xs font-bold px-2 py-1 rounded-full bg-slate-100 text-slate-600">{categoryFindings.length}</span>
-                    </div>
-                    <div className="mt-3 flex items-center justify-between text-[11px] font-bold">
-                      <span className="text-slate-400">{decision ? 'Decision tomada' : isActive ? 'Pendiente ahora' : 'Pendiente'}</span>
-                      {decision && <span className={decision === 'accepted' ? 'text-green-600' : 'text-red-500'}>{decision === 'accepted' ? 'Aceptado' : 'Rechazado'}</span>}
+                      {isDone ? (
+                        <CheckCircle size={18} className="text-green-500" />
+                      ) : isActive ? (
+                        <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse" />
+                      ) : null}
                     </div>
                   </button>
                 );
@@ -694,113 +742,132 @@ const App = () => {
             </div>
           </aside>
 
-          <section className="lg:col-span-8 space-y-6">
-            <div className="bg-white rounded-3xl border border-slate-100 shadow-sm p-6 space-y-6">
-              <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-                <div>
-                  <p className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Revision Actual</p>
-                  <h3 className="text-2xl font-black text-slate-900 tracking-tight">{activeCategory.label}</h3>
-                  <p className="text-sm text-slate-400">Revisa los hallazgos de este aspecto y luego decide si aceptas o no los cambios sugeridos.</p>
-                </div>
-                <div className="flex gap-3">
-                  <div className="rounded-2xl border border-slate-200 px-4 py-3 bg-slate-50">
-                    <p className="text-[10px] font-black uppercase tracking-wide text-slate-400">Hallazgos</p>
-                    <p className="text-xl font-bold text-slate-800">{(findingsByCategory[activeCategory.id] || []).length}</p>
-                  </div>
-                  <div className="rounded-2xl border border-slate-200 px-4 py-3 bg-slate-50">
-                    <p className="text-[10px] font-black uppercase tracking-wide text-slate-400">Filtrados</p>
-                    <p className="text-xl font-bold text-slate-800">{currentCategoryFindings.length}</p>
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex flex-wrap gap-4 items-center bg-slate-50 p-4 rounded-3xl border border-slate-100">
-                <div className="flex items-center gap-2">
-                  <span className="text-[10px] font-black text-slate-400 uppercase ml-2">Severidad:</span>
-                  <select value={filterSeverity} onChange={(e) => setFilterSeverity(e.target.value)} className="text-xs font-bold bg-white border border-slate-200 rounded-xl px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500/20">
-                    <option value="all">Todos</option>
-                    <option value="critical">Criticos</option>
-                    <option value="warning">Advertencias</option>
-                    <option value="info">Informativos</option>
-                  </select>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="text-[10px] font-black text-slate-400 uppercase ml-2">Tipo:</span>
-                  <select value={filterType} onChange={(e) => setFilterType(e.target.value)} className="text-xs font-bold bg-white border border-slate-200 rounded-xl px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500/20">
-                    {uniqueTypes.map(t => (<option key={t} value={t}>{t === 'all' ? 'Todos los tipos' : t}</option>))}
-                  </select>
-                </div>
-              </div>
-
-              {currentCategoryFindings.length > 0 ? (
-                <div className="space-y-4">
-                  {currentCategoryFindings.map((finding, i) => (
-                    <div key={i} className="group bg-white p-6 rounded-3xl border border-slate-100 shadow-sm hover:shadow-md transition-all text-left flex flex-col gap-6">
-                      <div className="flex gap-6">
-                        <div className={`mt-1 p-3 rounded-2xl shrink-0 ${finding.severity === 'critical' ? 'bg-red-100 text-red-600' : finding.severity === 'warning' ? 'bg-amber-100 text-amber-600' : 'bg-blue-100 text-blue-600'}`}>
-                          {finding.severity === 'critical' ? <ShieldAlert size={24} /> : finding.severity === 'warning' ? <AlertCircle size={24} /> : <Info size={24} />}
-                        </div>
-                        <div className="space-y-2 flex-1">
-                          <div className="flex justify-between items-start">
-                            <div>
-                              <div className="flex gap-2 mb-2">
-                                <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-slate-100 text-slate-500 uppercase tracking-wider">{finding.file_path} : Linea {finding.line}</span>
-                                <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-blue-50 text-blue-600 uppercase tracking-wider">{finding.type}</span>
+          <section className="lg:col-span-8 space-y-5">
+            <div className="bg-white rounded-3xl border border-slate-100 p-6">
+              
+              {!reviewCompleted ? (
+                <>
+                  <h3 className="text-2xl font-black text-slate-900 tracking-tight mb-6">{activeCategory.label}</h3>
+                  
+                  {currentCategoryFindings.length > 0 ? (
+                    <div className="space-y-6">
+                      {currentCategoryFindings.map((finding, index) => {
+                        const findingId = getFindingId(finding, index);
+                        const decision = findingDecisions[findingId];
+                        
+                        return (
+                          <div key={findingId} className={`rounded-2xl border transition-all overflow-hidden ${
+                            decision === 'accepted' ? 'border-green-300 shadow-green-100' :
+                            decision === 'rejected' ? 'border-red-300 shadow-red-100' : 'border-slate-200 hover:border-blue-300'
+                          }`}>
+                            <div className="p-5 bg-slate-50 border-b border-slate-100 flex justify-between items-center">
+                               <div className="flex items-center gap-2">
+                                  <span className="text-xs font-bold bg-white px-2 py-1 rounded text-slate-600">{finding.file_path}</span>
+                                  {finding.line && <span className="text-xs text-slate-500">Línea {finding.line}</span>}
+                               </div>
+                               <span className={`text-[10px] font-bold px-2 py-1 rounded uppercase ${
+                                  finding.severity === 'critical' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'
+                               }`}>{finding.severity}</span>
+                            </div>
+                            
+                            <div className="p-5 bg-white space-y-4">
+                              <h4 className="text-base font-bold text-slate-800">{finding.title}</h4>
+                              <p className="text-sm text-slate-500">{finding.description}</p>
+                              <div className="text-sm text-slate-600 bg-blue-50/50 p-3 rounded-lg border border-blue-100">
+                                <span className="font-bold">💡 Sugerencia: </span> {finding.recommendation}
                               </div>
-                              <h4 className="text-lg font-bold text-slate-800">{finding.title}</h4>
+                              
+                              {(finding.original_code || finding.secure_code) && (
+                                <div className="grid grid-cols-2 gap-4 mt-2">
+                                  <div className="bg-red-50 p-3 rounded-xl border border-red-100 overflow-x-auto">
+                                    <p className="text-[9px] font-bold text-red-500 uppercase mb-2">Original</p>
+                                    <pre className="text-[10px] text-red-900 font-mono">{finding.original_code || '# N/A'}</pre>
+                                  </div>
+                                  <div className="bg-green-50 p-3 rounded-xl border border-green-100 overflow-x-auto">
+                                    <p className="text-[9px] font-bold text-green-600 uppercase mb-2">Corregido</p>
+                                    <pre className="text-[10px] text-green-900 font-mono">{finding.secure_code || '# N/A'}</pre>
+                                  </div>
+                                </div>
+                              )}
+                              
+                              <div className="flex gap-3 pt-4 border-t border-slate-100">
+                                <button onClick={() => toggleFindingDecision(findingId, 'rejected')}
+                                  className={`flex-1 py-2.5 rounded-xl font-bold text-xs flex justify-center items-center gap-2 transition-all ${
+                                    decision === 'rejected' ? 'bg-red-500 text-white shadow-md shadow-red-200' : 'bg-slate-100 text-slate-500 hover:bg-red-50 hover:text-red-600'
+                                  }`}>
+                                  <X size={14} /> Rechazar Corrección
+                                </button>
+                                <button onClick={() => toggleFindingDecision(findingId, 'accepted')}
+                                  className={`flex-1 py-2.5 rounded-xl font-bold text-xs flex justify-center items-center gap-2 transition-all ${
+                                    decision === 'accepted' ? 'bg-green-500 text-white shadow-md shadow-green-200' : 'bg-slate-100 text-slate-500 hover:bg-green-50 hover:text-green-600'
+                                  }`}>
+                                  <Check size={14} /> Aceptar Corrección
+                                </button>
+                              </div>
                             </div>
                           </div>
-                          <p className="text-slate-500 text-sm leading-relaxed">{finding.description}</p>
-                          <div className="pt-2 flex items-center gap-2 text-sm"><span className="font-bold text-slate-700">Sugerencia:</span><span className="text-slate-600">{finding.recommendation}</span></div>
-                        </div>
-                      </div>
-                      {(finding.original_code || finding.secure_code) && (
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 border-t border-slate-50 pt-6">
-                          <div className="space-y-2"><div className="flex items-center gap-2 text-[10px] font-black text-red-400 uppercase tracking-widest px-1"><X size={12} /> Codigo Original</div><pre className="bg-red-50/30 border border-red-100 p-4 rounded-xl text-[11px] font-mono text-red-800 overflow-x-auto whitespace-pre-wrap"><code>{finding.original_code || '# No hay codigo'}</code></pre></div>
-                          <div className="space-y-2"><div className="flex items-center gap-2 text-[10px] font-black text-green-500 uppercase tracking-widest px-1"><Check size={12} /> Codigo Corregido</div><pre className="bg-green-50 border border-green-100 p-4 rounded-xl text-[11px] font-mono text-green-800 overflow-x-auto whitespace-pre-wrap shadow-inner"><code>{finding.secure_code || '# Sin cambios'}</code></pre></div>
-                        </div>
-                      )}
+                        );
+                      })}
                     </div>
-                  ))}
-                </div>
+                  ) : (
+                    <div className="bg-slate-50 border-2 border-dashed border-slate-200 rounded-2xl py-12 text-center">
+                      <p className="text-slate-400 font-medium italic">No hay hallazgos para este aspecto. Puedes avanzar.</p>
+                    </div>
+                  )}
+
+                  <div className="mt-8 flex justify-end border-t border-slate-100 pt-6">
+                     <button 
+                        onClick={advanceToNextCategory} 
+                        disabled={!isCurrentCategoryDone}
+                        className={`px-8 py-3 rounded-xl font-bold text-sm flex items-center gap-2 transition-all ${
+                          isCurrentCategoryDone ? 'bg-blue-600 text-white shadow-lg hover:bg-blue-700' : 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                        }`}>
+                        Siguiente Aspecto <ChevronRight size={16} />
+                     </button>
+                  </div>
+                </>
               ) : (
-                <div className="bg-slate-100/50 border-2 border-dashed border-slate-200 rounded-3xl py-12 text-center"><p className="text-slate-400 font-medium italic">No hay hallazgos visibles para este aspecto con los filtros seleccionados.</p></div>
+                <div className="space-y-6">
+                  <div className="text-center pb-4 border-b border-slate-100">
+                    <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                      <CheckCircle size={32} className="text-green-600" />
+                    </div>
+                    <h3 className="text-2xl font-black text-slate-900 tracking-tight">Revisión Finalizada</h3>
+                    <p className="text-slate-500 mt-2">Has evaluado todos los hallazgos propuestos por la IA.</p>
+                  </div>
+                  
+                  <div className="bg-slate-50 rounded-2xl p-6 border border-slate-200 text-center">
+                    <p className="text-sm font-bold text-slate-600 mb-6">Estás a punto de inyectar las correcciones aceptadas a tu entorno virtual.</p>
+                    <button 
+                      onClick={enviarDecisionesAlBackend}
+                      disabled={isSendingToBackend}
+                      className="w-full md:w-auto px-10 py-4 rounded-2xl font-black text-sm flex items-center justify-center mx-auto gap-3 text-white bg-[#0f172a] hover:bg-slate-800 shadow-xl shadow-slate-300 transition-all active:scale-95">
+                      {isSendingToBackend ? (
+                        <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      ) : (
+                        <Zap size={18} />
+                      )}
+                      {isSendingToBackend ? 'Aplicando Parches...' : 'Aplicar Cambios en Backend'}
+                    </button>
+                  </div>
+                  
+                  <button onClick={handleReset} className="block text-center w-full text-xs font-bold text-slate-400 hover:text-blue-600 mt-4">
+                    Empezar un nuevo análisis
+                  </button>
+                </div>
               )}
 
-              {!reviewCompleted ? (
-                <div className="flex flex-col md:flex-row items-center justify-between gap-4 pt-4 border-t border-slate-100">
-                  <div className="text-sm text-slate-400">{activeDecision ? 'Ya respondiste este aspecto. Puedes revisar otro ya completado desde el submenu.' : 'Elige una decision para continuar con el siguiente aspecto del analisis.'}</div>
-                  <div className="flex gap-3">
-                    <button type="button" onClick={() => submitCategoryDecision(activeCategory.id, 'rejected')} disabled={!!activeDecision} className="px-5 py-3 rounded-2xl border border-red-200 bg-red-50 text-red-600 font-bold text-sm hover:bg-red-100 transition-all disabled:opacity-50 disabled:cursor-not-allowed">No aceptar cambios</button>
-                    <button type="button" onClick={() => submitCategoryDecision(activeCategory.id, 'accepted')} disabled={!!activeDecision} className="px-5 py-3 rounded-2xl border border-green-200 bg-green-50 text-green-700 font-bold text-sm hover:bg-green-100 transition-all disabled:opacity-50 disabled:cursor-not-allowed">Aceptar cambios</button>
-                  </div>
-                </div>
-              ) : (
-                <div className="bg-slate-50 rounded-3xl border border-slate-100 p-5">
-                  <h4 className="text-sm font-black uppercase tracking-[0.18em] text-slate-400 mb-3">Resumen de decisiones</h4>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    {ANALYSIS_CATEGORIES.map(category => (
-                      <div key={category.id} className="rounded-2xl border border-slate-200 bg-white px-4 py-3 flex items-center justify-between">
-                        <span className="text-sm font-bold text-slate-800">{category.label}</span>
-                        <span className={`text-xs font-bold uppercase ${reviewDecisions[category.id] === 'accepted' ? 'text-green-600' : 'text-red-500'}`}>{reviewDecisions[category.id] === 'accepted' ? 'Aceptado' : 'Rechazado'}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
             </div>
-
-            <button onClick={handleReset} className="flex items-center gap-2 text-slate-400 font-bold hover:text-blue-600 transition-colors mx-auto pb-10"><ArrowLeft size={18} /> Volver a configurar analisis</button>
           </section>
         </div>
       </div>
     );
-  };  // ── RENDER PRINCIPAL ─────────────────────────────────────────────────────
+  };
+
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col font-sans selection:bg-blue-100 selection:text-blue-900">
       {Header()}
       {view !== 'results' && <WizardBar currentStep={wizardStep} />}
-
       <main className="flex-1 px-8 py-10 flex flex-col">
         {view === 'setup' && wizardStep === 1 && Step1View()}
         {view === 'setup' && wizardStep === 2 && Step2View()}
@@ -808,9 +875,7 @@ const App = () => {
           <div className="flex-1 flex flex-col items-center justify-center space-y-8 animate-in zoom-in duration-500">
             <div className="relative">
               <div className="w-24 h-24 border-4 border-blue-100 border-t-blue-600 rounded-full animate-spin"></div>
-              <div className="absolute inset-0 flex items-center justify-center">
-                <Github className="text-blue-600 animate-pulse" size={32} />
-              </div>
+              <div className="absolute inset-0 flex items-center justify-center"><Github className="text-blue-600 animate-pulse" size={32} /></div>
             </div>
             <div className="text-center">
               <h2 className="text-3xl font-black text-slate-800 tracking-tight italic">Analizando Matriz...</h2>
@@ -820,7 +885,6 @@ const App = () => {
         )}
         {view === 'results' && ResultsView()}
       </main>
-
       {Footer()}
       <style dangerouslySetInnerHTML={{ __html: `
         .custom-scrollbar::-webkit-scrollbar { width: 6px; }
@@ -833,5 +897,3 @@ const App = () => {
 };
 
 export default App;
-
-

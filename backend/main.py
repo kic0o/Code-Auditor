@@ -46,6 +46,15 @@ class RepoRequest(BaseModel):
     selected_files_by_category: dict = Field(default_factory=dict) 
     llm_mode: str = "success" 
 
+# 🧠 NUEVOS MODELOS CORREGIDOS (A prueba de balas)
+class ApprovedFinding(BaseModel):
+    file_path: str
+    original_code: str | None = None  # Puede venir vacío
+    secure_code: str | None = None    # Puede venir vacío
+
+class ApplyPatchesRequest(BaseModel):
+    session_id: str
+    approved_findings: list[ApprovedFinding] # Sintaxis moderna
 
 @app.get("/")
 def root():
@@ -67,116 +76,118 @@ def get_files(request: RepoRequest):
 @app.post("/analyze", response_model=ConsolidatedReport)
 def analyze(request: RepoRequest):
     if not request.selected_files:
-        raise HTTPException(
-            status_code=400,
-            detail="Debes seleccionar al menos un archivo para analizar."
-        )
-
-    MAX_FILES_PER_ANALYSIS = 10
-    if len(request.selected_files) > MAX_FILES_PER_ANALYSIS:
-        raise HTTPException(status_code=400, detail="Demasiados archivos.")
+        raise HTTPException(status_code=400, detail="Selecciona archivos.")
 
     ai_responses = []
     skipped_files = []
-    
-    # Nace la sesión del Workspace
-    session_id = workspace.create_session()
+    session_id = workspace.create_session() # 🆔 Creamos la sesión
 
     try:
         for file_path in request.selected_files:
             try:
-                # 1. Descargas el archivo de GitHub
                 file_data = get_file_content(request.repo_url, file_path)
-
-                # 🛡️ SANDBOX (El cambio de tu compañero): Verificar seguridad antes de guardar
                 contenido_seguro = sandbox_check(file_path, file_data["content"])
-
-                # 2. Guardas el código SEGURO en la memoria virtual (Tu cambio)
                 workspace.add_file(session_id, file_path, contenido_seguro)
-                print(f"✅ Archivo {file_path} guardado en el Workspace {session_id}")
 
                 findings_del_archivo = []
 
-                # 🧠 EL ENRUTADOR INTELIGENTE (Tu cambio)
+                # 🧠 ENRUTADOR INTELIGENTE
                 for categoria, archivos_marcados in request.selected_files_by_category.items():
                     if file_path in archivos_marcados:
                         url_destino = URLS_IA.get(categoria)
                         
                         if url_destino:
-                            print(f"🚀 Analizando {categoria} en Azure para: {file_path}")
+                            # Llamada real a Jorge
                             hallazgos = analizar_con_ia_externa(session_id, file_path, workspace, url_destino, categoria)
                             findings_del_archivo.extend(hallazgos)
                         else:
-                            print(f"🚧 Categoría {categoria} en construcción. Simulando respuesta.")
+                            # Mock para categorías en construcción
                             findings_del_archivo.append({
                                 "file_path": file_path,
                                 "type": categoria,
                                 "severity": "info",
                                 "title": f"Análisis de {categoria} Pendiente",
-                                "description": f"El equipo de IA (Jorge) aún está preparando el modelo para '{categoria}'.",
-                                "recommendation": "Esta es una respuesta simulada para probar la interfaz sin que el sistema falle.",
-                                "original_code": "# Código en espera de análisis...",
-                                "secure_code": "# Código en espera de análisis...",
+                                "description": "Modelo en desarrollo.",
+                                "recommendation": "Respuesta simulada para pruebas.",
+                                "original_code": "",
+                                "secure_code": "",
                                 "line": 0
                             })
 
+                # 🎯 IMPORTANTE: Empaquetamos con la llave 'analyzed' para que utils.py no falle
                 ai_responses.append({
+                    "analyzed": True,
                     "file_path": file_path,
                     "findings": findings_del_archivo
                 })
 
-            except SandboxViolation as sandbox_error:
-                print(f"🛡️  [SANDBOX] Archivo bloqueado: {file_path} — {str(sandbox_error)}")
-                skipped_files.append({
-                    "file_path": file_path,
-                    "reason": str(sandbox_error)
-                })
+            except Exception as e:
+                skipped_files.append({"file_path": file_path, "reason": str(e)})
 
-            except ValueError as file_error:
-                skipped_files.append({
-                    "file_path": file_path,
-                    "reason": str(file_error)
-                })
-
-            except Exception as file_error:
-                print(f"🛑 ERROR REAL AL PROCESAR ARCHIVO: {str(file_error)}")
-                skipped_files.append({
-                    "file_path": file_path,
-                    "reason": f"Error inesperado al procesar archivo: {str(file_error)}"
-                })
-
-        if not ai_responses and skipped_files:
-            raise HTTPException(
-                status_code=422,
-                detail="Ningún archivo pudo ser analizado. Todos fueron omitidos por ser inválidos o bloqueados."
-            )
-
+        # Consolidamos el reporte
         reporte_final = consolidate_results(
             ai_responses=ai_responses,
             total_files_requested=len(request.selected_files),
             skipped_files=skipped_files
         )
 
+        # 🆔 INYECTAMOS EL ID PARA JOSHUA
+        reporte_final["session_id"] = session_id
+
         return reporte_final
 
-    except LLMTimeoutError as e:
-        raise HTTPException(
-            status_code=504,
-            detail=f"Error de timeout al comunicarse con el LLM: {str(e)}"
-        )
-    except LLMServiceError as e:
-        raise HTTPException(
-            status_code=503,
-            detail=f"Error del servicio LLM: {str(e)}"
-        )
-    except HTTPException:
-        raise
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error interno durante el análisis: {str(e)}"
-        )
+        print(f"🛑 ERROR CRÍTICO EN CONSOLIDACIÓN: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error al armar el reporte: {str(e)}")
 
+@app.post("/apply-patches")
+def apply_patches(request: ApplyPatchesRequest):
+    """
+    Recibe los hallazgos que el usuario aprobó en el Frontend y 
+    los aplica directamente en el Virtual Workspace.
+    """
+    if not request.approved_findings:
+        return {"message": "No se recibieron parches para aplicar.", "archivos_actualizados": []}
+
+    archivos_modificados = set()
+
+    try:
+        for finding in request.approved_findings:
+            # Si no hay código original para buscar, saltamos este hallazgo
+            if not finding.original_code or not finding.secure_code:
+                continue
+
+            # 1. Sacamos el código actual del archivo desde la RAM
+            try:
+                codigo_actual = workspace.get_file(request.session_id, finding.file_path)
+            except ValueError:
+                print(f"⚠️ Archivo no encontrado en workspace: {finding.file_path}")
+                continue
+
+            # 2. Reemplazo quirúrgico (Patching)
+            # Verificamos que el código original aún exista en el archivo
+            if finding.original_code in codigo_actual:
+                nuevo_codigo = codigo_actual.replace(finding.original_code, finding.secure_code)
+                
+                # 3. Sobrescribimos el archivo en el Workspace con la versión limpia
+                workspace.add_file(request.session_id, finding.file_path, nuevo_codigo)
+                archivos_modificados.add(finding.file_path)
+                
+                print(f"✅ Parche aplicado con éxito en: {finding.file_path}")
+            else:
+                print(f"⚠️ No se pudo aplicar el parche en {finding.file_path}. El fragmento original no coincide.")
+
+        return {
+            "message": "Parches aplicados correctamente en el entorno virtual.",
+            "archivos_actualizados": list(archivos_modificados)
+        }
+
+    except Exception as e:
+        print(f"🛑 ERROR AL APLICAR PARCHES: {str(e)}")
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Error interno al modificar el workspace: {str(e)}"
+        )
 
 @app.post("/upload-doc")
 async def upload_doc(file: UploadFile = File(...)):

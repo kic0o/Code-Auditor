@@ -1,6 +1,10 @@
 import requests
 from workspace_manager import VirtualWorkspace
 
+# 1. Regresamos las clases de error para que main.py pueda importarlas felizmente
+class LLMTimeoutError(Exception):
+    pass
+
 class LLMServiceError(Exception):
     pass
 
@@ -10,6 +14,7 @@ def analizar_con_ia_externa(session_id: str, file_path: str, workspace: VirtualW
     payload_jorge = {"code": codigo_actual}
     
     try:
+        # Configuramos un timeout de 30 segundos
         respuesta = requests.post(url_api, json=payload_jorge, timeout=30)
         
         if respuesta.status_code == 200:
@@ -35,6 +40,10 @@ def analizar_con_ia_externa(session_id: str, file_path: str, workspace: VirtualW
             print(f"❌ Error en API de Jorge ({categoria}): {respuesta.status_code}")
             return []
             
+    except requests.exceptions.Timeout:
+        # Si Azure tarda más de 30s, activamos el escudo protector de main.py
+        raise LLMTimeoutError(f"La API de Azure ({categoria}) tardó demasiado en responder.")
+        
     except requests.exceptions.RequestException as e:
         print(f"❌ Error de red al conectar con Azure ({categoria}): {e}")
         return []
