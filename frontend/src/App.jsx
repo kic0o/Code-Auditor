@@ -110,6 +110,8 @@ const App = () => {
   const [uploadedDocs, setUploadedDocs] = useState([]);
   const [uploadReviewType] = useState('documentation');
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
+  const [currentReviewIndex, setCurrentReviewIndex] = useState(0);
+  const [reviewDecisions, setReviewDecisions] = useState({});
   const fileInputRef = useRef(null);
 
   // ── MEMOS ──
@@ -146,6 +148,66 @@ const App = () => {
       return acc;
     }, {})
   ), [selectedFileMatrix]);
+
+  const normalizeFindingCategory = (finding) => {
+    const directCategory = finding.category || finding.analysis_category || finding.review_category || finding.aspect;
+    if (directCategory) return directCategory;
+
+    const searchableContent = [
+      finding.type,
+      finding.title,
+      finding.description,
+      finding.recommendation,
+    ]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase();
+
+    if (/(auth|token|xss|sql|csrf|secure|security|encrypt|vulnerab|injection)/.test(searchableContent)) {
+      return 'security';
+    }
+    if (/(clean code|best practice|naming|refactor|readability|maintainab|standard|convention)/.test(searchableContent)) {
+      return 'best_practices';
+    }
+    if (/(logic|workflow|algorithm|condition|branch|state|flow|business process)/.test(searchableContent)) {
+      return 'software_logic';
+    }
+    return 'business_rules';
+  };
+
+  const findingsByCategory = useMemo(() => {
+    const emptyMap = ANALYSIS_CATEGORIES.reduce((acc, category) => {
+      acc[category.id] = [];
+      return acc;
+    }, {});
+
+    if (!analysisResult?.findings) return emptyMap;
+
+    return analysisResult.findings.reduce((acc, finding) => {
+      const categoryId = normalizeFindingCategory(finding);
+      const safeCategoryId = ANALYSIS_CATEGORIES.some(category => category.id === categoryId)
+        ? categoryId
+        : 'business_rules';
+      acc[safeCategoryId].push(finding);
+      return acc;
+    }, emptyMap);
+  }, [analysisResult]);
+
+  const currentReviewCategory = ANALYSIS_CATEGORIES[currentReviewIndex];
+
+  const currentCategoryFindings = useMemo(() => {
+    if (!currentReviewCategory) return [];
+    return findingsByCategory[currentReviewCategory.id].filter(finding => {
+      const matchSeverity = filterSeverity === 'all' || finding.severity === filterSeverity;
+      const matchType = filterType === 'all' || finding.type === filterType;
+      return matchSeverity && matchType;
+    });
+  }, [currentReviewCategory, findingsByCategory, filterSeverity, filterType]);
+
+  const reviewCompleted = useMemo(
+    () => ANALYSIS_CATEGORIES.every(category => reviewDecisions[category.id]),
+    [reviewDecisions]
+  );
 
   // ── FUNCIONES DE CONEXIÓN Y ANÁLISIS ──
   const handleConnect = async () => {
@@ -212,6 +274,8 @@ const App = () => {
 
       const data = await response.json();
       setAnalysisResult(data);
+      setCurrentReviewIndex(0);
+      setReviewDecisions({});
       setView('results');
     } catch (err) {
       console.error(err);
@@ -229,6 +293,8 @@ const App = () => {
     setRepoUrl('');
     setAnalysisResult(null);
     setUploadedDocs([]);
+    setCurrentReviewIndex(0);
+    setReviewDecisions({});
   };
 
   // ── MATRIZ FUNCTIONS ──
@@ -299,6 +365,27 @@ const App = () => {
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
   const removeDoc = (index) => setUploadedDocs(prev => prev.filter((_, i) => i !== index));
+
+  const submitCategoryDecision = (categoryId, decision) => {
+    setReviewDecisions(prev => ({
+      ...prev,
+      [categoryId]: decision,
+    }));
+
+    const currentIndex = ANALYSIS_CATEGORIES.findIndex(category => category.id === categoryId);
+    if (currentIndex < ANALYSIS_CATEGORIES.length - 1) {
+      setCurrentReviewIndex(currentIndex + 1);
+    }
+  };
+
+  const goToReviewedCategory = (targetIndex) => {
+    const targetCategory = ANALYSIS_CATEGORIES[targetIndex];
+    const isAnswered = !!reviewDecisions[targetCategory.id];
+    const isCurrent = targetIndex === currentReviewIndex;
+    if (isAnswered || isCurrent || reviewCompleted) {
+      setCurrentReviewIndex(targetIndex);
+    }
+  };
 
   // ── VISTAS ───────────────────────────────────────────────────────────────
 
@@ -544,96 +631,171 @@ const App = () => {
     </div>
   );
 
-  // VISTA RESULTADOS (CON CÓDIGO)
+  // VISTA RESULTADOS: REVISION GUIADA POR CATEGORIA
   const ResultsView = () => {
     if (!analysisResult) return null;
+
+    const activeCategory = currentReviewCategory || ANALYSIS_CATEGORIES[0];
+    const activeDecision = reviewDecisions[activeCategory.id];
+
     return (
-      <div className="max-w-5xl mx-auto w-full space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700">
-        <div className="flex flex-col md:flex-row gap-6 items-center justify-between bg-white p-8 rounded-[2.5rem] shadow-xl shadow-slate-200/50 border border-slate-100">
+      <div className="max-w-7xl mx-auto w-full space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700">
+        <div className="flex flex-col lg:flex-row gap-6 items-start justify-between bg-white p-8 rounded-[2.5rem] shadow-xl shadow-slate-200/50 border border-slate-100">
           <div className="text-left">
-            <h2 className="text-3xl font-black text-slate-900 tracking-tighter uppercase italic">Reporte de Auditoría</h2>
-            <p className="text-slate-400 font-medium">Análisis completado en {analysisResult.files_analyzed} archivos</p>
+            <h2 className="text-3xl font-black text-slate-900 tracking-tighter uppercase italic">Revision Guiada del Analisis</h2>
+            <p className="text-slate-400 font-medium">Evalua cada aspecto por separado y decide si aceptas o no los cambios sugeridos.</p>
           </div>
-          <div className="flex items-center gap-8">
+          <div className="flex items-center gap-4">
             <div className="text-center">
               <div className={`text-5xl font-black ${analysisResult.total_score > 70 ? 'text-green-500' : 'text-orange-500'}`}>
                 {analysisResult.total_score}<span className="text-xl text-slate-300">/100</span>
               </div>
               <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">Global Score</p>
             </div>
-            <div className="h-12 w-[1px] bg-slate-100 hidden md:block"></div>
-            <div className="flex gap-4">
-              <div className="text-center px-4 py-2 bg-red-50 rounded-2xl border border-red-100">
-                <p className="text-xl font-black text-red-600">{analysisResult.critical_issues}</p>
-                <p className="text-[9px] font-bold text-red-400 uppercase">Críticos</p>
-              </div>
-              <div className="text-center px-4 py-2 bg-amber-50 rounded-2xl border border-amber-100">
-                <p className="text-xl font-black text-amber-600">{analysisResult.warnings}</p>
-                <p className="text-[9px] font-bold text-amber-400 uppercase">Alertas</p>
-              </div>
+            <div className="bg-slate-100 rounded-2xl px-4 py-3 border border-slate-200">
+              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Progreso</p>
+              <p className="text-lg font-bold text-slate-800">{Object.keys(reviewDecisions).length}/{ANALYSIS_CATEGORIES.length}</p>
             </div>
           </div>
         </div>
 
-        <div className="space-y-4">
-          <h3 className="text-[11px] font-black text-slate-400 uppercase tracking-[0.2em] px-4">Hallazgos Detectados ({filteredFindings.length})</h3>
-          {filteredFindings.map((finding, i) => (
-            <div key={i} className="group bg-white p-6 rounded-3xl border border-slate-100 shadow-sm hover:shadow-md transition-all text-left flex flex-col gap-6">
-              <div className="flex gap-6">
-                <div className={`mt-1 p-3 rounded-2xl shrink-0 ${finding.severity === 'critical' ? 'bg-red-100 text-red-600' : finding.severity === 'warning' ? 'bg-amber-100 text-amber-600' : 'bg-blue-100 text-blue-600'}`}>
-                  {finding.severity === 'critical' ? <ShieldAlert size={24} /> : finding.severity === 'warning' ? <AlertCircle size={24} /> : <Info size={24} />}
-                </div>
-                <div className="space-y-2 flex-1">
-                  <div className="flex justify-between items-start">
-                    <div>
-                      <div className="flex gap-2 mb-2">
-                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-slate-100 text-slate-500 uppercase tracking-wider">{finding.file_path} : Línea {finding.line}</span>
-                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-blue-50 text-blue-600 uppercase tracking-wider">{finding.type}</span>
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+          <aside className="lg:col-span-4">
+            <div className="bg-white rounded-3xl border border-slate-100 shadow-sm p-5 space-y-3">
+              <h3 className="text-[11px] font-black text-slate-400 uppercase tracking-[0.2em]">Submenu de Revision</h3>
+              {ANALYSIS_CATEGORIES.map((category, index) => {
+                const categoryFindings = findingsByCategory[category.id] || [];
+                const decision = reviewDecisions[category.id];
+                const isActive = currentReviewIndex === index;
+                const isUnlocked = !!decision || isActive || reviewCompleted;
+
+                return (
+                  <button
+                    key={category.id}
+                    type="button"
+                    disabled={!isUnlocked}
+                    onClick={() => goToReviewedCategory(index)}
+                    className={`w-full text-left rounded-2xl border p-4 transition-all ${isActive ? 'border-blue-300 bg-blue-50 shadow-sm' : 'border-slate-200 bg-white hover:border-slate-300'} ${!isUnlocked ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-xs font-black uppercase tracking-wide text-slate-400">Aspecto {index + 1}</p>
+                        <h4 className="text-sm font-bold text-slate-800">{category.label}</h4>
                       </div>
-                      <h4 className="text-lg font-bold text-slate-800">{finding.title}</h4>
+                      <span className="text-xs font-bold px-2 py-1 rounded-full bg-slate-100 text-slate-600">{categoryFindings.length}</span>
                     </div>
+                    <div className="mt-3 flex items-center justify-between text-[11px] font-bold">
+                      <span className="text-slate-400">{decision ? 'Decision tomada' : isActive ? 'Pendiente ahora' : 'Pendiente'}</span>
+                      {decision && <span className={decision === 'accepted' ? 'text-green-600' : 'text-red-500'}>{decision === 'accepted' ? 'Aceptado' : 'Rechazado'}</span>}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </aside>
+
+          <section className="lg:col-span-8 space-y-6">
+            <div className="bg-white rounded-3xl border border-slate-100 shadow-sm p-6 space-y-6">
+              <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+                <div>
+                  <p className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Revision Actual</p>
+                  <h3 className="text-2xl font-black text-slate-900 tracking-tight">{activeCategory.label}</h3>
+                  <p className="text-sm text-slate-400">Revisa los hallazgos de este aspecto y luego decide si aceptas o no los cambios sugeridos.</p>
+                </div>
+                <div className="flex gap-3">
+                  <div className="rounded-2xl border border-slate-200 px-4 py-3 bg-slate-50">
+                    <p className="text-[10px] font-black uppercase tracking-wide text-slate-400">Hallazgos</p>
+                    <p className="text-xl font-bold text-slate-800">{(findingsByCategory[activeCategory.id] || []).length}</p>
                   </div>
-                  <p className="text-slate-500 text-sm leading-relaxed">{finding.description}</p>
-                  <div className="pt-2 flex items-center gap-2 text-sm">
-                    <span className="font-bold text-slate-700">💡 Sugerencia:</span>
-                    <span className="text-slate-600">{finding.recommendation}</span>
+                  <div className="rounded-2xl border border-slate-200 px-4 py-3 bg-slate-50">
+                    <p className="text-[10px] font-black uppercase tracking-wide text-slate-400">Filtrados</p>
+                    <p className="text-xl font-bold text-slate-800">{currentCategoryFindings.length}</p>
                   </div>
                 </div>
               </div>
 
-              {/* COMPARADOR DE CÓDIGO (Que Nadia borró y aquí regresamos) */}
-              {(finding.original_code || finding.secure_code) && (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 border-t border-slate-50 pt-6">
-                  <div className="space-y-2">
-                    <div className="flex items-center gap-2 text-[10px] font-black text-red-400 uppercase tracking-widest px-1">
-                      <X size={12} /> Código Original
+              <div className="flex flex-wrap gap-4 items-center bg-slate-50 p-4 rounded-3xl border border-slate-100">
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-black text-slate-400 uppercase ml-2">Severidad:</span>
+                  <select value={filterSeverity} onChange={(e) => setFilterSeverity(e.target.value)} className="text-xs font-bold bg-white border border-slate-200 rounded-xl px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500/20">
+                    <option value="all">Todos</option>
+                    <option value="critical">Criticos</option>
+                    <option value="warning">Advertencias</option>
+                    <option value="info">Informativos</option>
+                  </select>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-black text-slate-400 uppercase ml-2">Tipo:</span>
+                  <select value={filterType} onChange={(e) => setFilterType(e.target.value)} className="text-xs font-bold bg-white border border-slate-200 rounded-xl px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500/20">
+                    {uniqueTypes.map(t => (<option key={t} value={t}>{t === 'all' ? 'Todos los tipos' : t}</option>))}
+                  </select>
+                </div>
+              </div>
+
+              {currentCategoryFindings.length > 0 ? (
+                <div className="space-y-4">
+                  {currentCategoryFindings.map((finding, i) => (
+                    <div key={i} className="group bg-white p-6 rounded-3xl border border-slate-100 shadow-sm hover:shadow-md transition-all text-left flex flex-col gap-6">
+                      <div className="flex gap-6">
+                        <div className={`mt-1 p-3 rounded-2xl shrink-0 ${finding.severity === 'critical' ? 'bg-red-100 text-red-600' : finding.severity === 'warning' ? 'bg-amber-100 text-amber-600' : 'bg-blue-100 text-blue-600'}`}>
+                          {finding.severity === 'critical' ? <ShieldAlert size={24} /> : finding.severity === 'warning' ? <AlertCircle size={24} /> : <Info size={24} />}
+                        </div>
+                        <div className="space-y-2 flex-1">
+                          <div className="flex justify-between items-start">
+                            <div>
+                              <div className="flex gap-2 mb-2">
+                                <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-slate-100 text-slate-500 uppercase tracking-wider">{finding.file_path} : Linea {finding.line}</span>
+                                <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-blue-50 text-blue-600 uppercase tracking-wider">{finding.type}</span>
+                              </div>
+                              <h4 className="text-lg font-bold text-slate-800">{finding.title}</h4>
+                            </div>
+                          </div>
+                          <p className="text-slate-500 text-sm leading-relaxed">{finding.description}</p>
+                          <div className="pt-2 flex items-center gap-2 text-sm"><span className="font-bold text-slate-700">Sugerencia:</span><span className="text-slate-600">{finding.recommendation}</span></div>
+                        </div>
+                      </div>
+                      {(finding.original_code || finding.secure_code) && (
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 border-t border-slate-50 pt-6">
+                          <div className="space-y-2"><div className="flex items-center gap-2 text-[10px] font-black text-red-400 uppercase tracking-widest px-1"><X size={12} /> Codigo Original</div><pre className="bg-red-50/30 border border-red-100 p-4 rounded-xl text-[11px] font-mono text-red-800 overflow-x-auto whitespace-pre-wrap"><code>{finding.original_code || '# No hay codigo'}</code></pre></div>
+                          <div className="space-y-2"><div className="flex items-center gap-2 text-[10px] font-black text-green-500 uppercase tracking-widest px-1"><Check size={12} /> Codigo Corregido</div><pre className="bg-green-50 border border-green-100 p-4 rounded-xl text-[11px] font-mono text-green-800 overflow-x-auto whitespace-pre-wrap shadow-inner"><code>{finding.secure_code || '# Sin cambios'}</code></pre></div>
+                        </div>
+                      )}
                     </div>
-                    <pre className="bg-red-50/30 border border-red-100 p-4 rounded-xl text-[11px] font-mono text-red-800 overflow-x-auto whitespace-pre-wrap">
-                      <code>{finding.original_code || "# No hay código"}</code>
-                    </pre>
+                  ))}
+                </div>
+              ) : (
+                <div className="bg-slate-100/50 border-2 border-dashed border-slate-200 rounded-3xl py-12 text-center"><p className="text-slate-400 font-medium italic">No hay hallazgos visibles para este aspecto con los filtros seleccionados.</p></div>
+              )}
+
+              {!reviewCompleted ? (
+                <div className="flex flex-col md:flex-row items-center justify-between gap-4 pt-4 border-t border-slate-100">
+                  <div className="text-sm text-slate-400">{activeDecision ? 'Ya respondiste este aspecto. Puedes revisar otro ya completado desde el submenu.' : 'Elige una decision para continuar con el siguiente aspecto del analisis.'}</div>
+                  <div className="flex gap-3">
+                    <button type="button" onClick={() => submitCategoryDecision(activeCategory.id, 'rejected')} disabled={!!activeDecision} className="px-5 py-3 rounded-2xl border border-red-200 bg-red-50 text-red-600 font-bold text-sm hover:bg-red-100 transition-all disabled:opacity-50 disabled:cursor-not-allowed">No aceptar cambios</button>
+                    <button type="button" onClick={() => submitCategoryDecision(activeCategory.id, 'accepted')} disabled={!!activeDecision} className="px-5 py-3 rounded-2xl border border-green-200 bg-green-50 text-green-700 font-bold text-sm hover:bg-green-100 transition-all disabled:opacity-50 disabled:cursor-not-allowed">Aceptar cambios</button>
                   </div>
-                  <div className="space-y-2">
-                    <div className="flex items-center gap-2 text-[10px] font-black text-green-500 uppercase tracking-widest px-1">
-                      <Check size={12} /> Código Corregido
-                    </div>
-                    <pre className="bg-green-50 border border-green-100 p-4 rounded-xl text-[11px] font-mono text-green-800 overflow-x-auto whitespace-pre-wrap shadow-inner">
-                      <code>{finding.secure_code || "# Sin cambios"}</code>
-                    </pre>
+                </div>
+              ) : (
+                <div className="bg-slate-50 rounded-3xl border border-slate-100 p-5">
+                  <h4 className="text-sm font-black uppercase tracking-[0.18em] text-slate-400 mb-3">Resumen de decisiones</h4>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {ANALYSIS_CATEGORIES.map(category => (
+                      <div key={category.id} className="rounded-2xl border border-slate-200 bg-white px-4 py-3 flex items-center justify-between">
+                        <span className="text-sm font-bold text-slate-800">{category.label}</span>
+                        <span className={`text-xs font-bold uppercase ${reviewDecisions[category.id] === 'accepted' ? 'text-green-600' : 'text-red-500'}`}>{reviewDecisions[category.id] === 'accepted' ? 'Aceptado' : 'Rechazado'}</span>
+                      </div>
+                    ))}
                   </div>
                 </div>
               )}
             </div>
-          ))}
-        </div>
 
-        <button onClick={handleReset} className="flex items-center gap-2 text-slate-400 font-bold hover:text-blue-600 transition-colors mx-auto pb-10">
-          <ArrowLeft size={18} /> Volver a configurar análisis
-        </button>
+            <button onClick={handleReset} className="flex items-center gap-2 text-slate-400 font-bold hover:text-blue-600 transition-colors mx-auto pb-10"><ArrowLeft size={18} /> Volver a configurar analisis</button>
+          </section>
+        </div>
       </div>
     );
-  };
-
-  // ── RENDER PRINCIPAL ─────────────────────────────────────────────────────
+  };  // ── RENDER PRINCIPAL ─────────────────────────────────────────────────────
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col font-sans selection:bg-blue-100 selection:text-blue-900">
       {Header()}
@@ -671,3 +833,5 @@ const App = () => {
 };
 
 export default App;
+
+
