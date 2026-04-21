@@ -9,7 +9,7 @@ import requests
 from tools.github_tool import get_repo_files, get_file_content, get_repo_file_bytes
 from schemas import ConsolidatedReport
 from utils import consolidate_results
-from services.llm_service import analizar_con_ia_externa, LLMTimeoutError, LLMServiceError
+from services.llm_service import analizar_con_ia_externa, analizar_proyecto_completo, analizar_reglas_negocio, LLMTimeoutError, LLMServiceError
 from services.document_parser import extraer_texto_por_extension, DocumentParserError
 from workspace_manager import VirtualWorkspace
 from sandbox import sandbox_check, SandboxViolation
@@ -32,7 +32,7 @@ workspace = VirtualWorkspace()
 
 URLS_IA = {
     "security": os.getenv("IA_SECURITY_URL", "https://linterlogicai.azurewebsites.net/api/security"),
-    "business_rules": os.getenv("IA_RULES_URL", ""),
+    "business_rules": os.getenv("IA_RULES_URL", "https://linterlogicai.azurewebsites.net/api/analyze"),
     "software_logic": os.getenv("IA_LOGIC_URL", ""),
     "best_practices": os.getenv("IA_PRACTICES_URL", "")
 }
@@ -90,82 +90,104 @@ def analyze(request: RepoRequest):
     if not request.selected_files:
         raise HTTPException(status_code=400, detail="Selecciona archivos.")
 
-    ai_responses = []
-    skipped_files = []
     session_id = workspace.create_session()
+    skipped_files = []
+    bundle_completo = {}
 
     try:
+        # 1. DESCARGA Y VERIFICACIÓN (Llenamos la RAM y preparamos los textos)
         for file_path in request.selected_files:
             try:
                 extension = os.path.splitext(file_path)[1].lower()
 
-                # ─────────────────────────────────────────────
-                # Sprint 8: documentos internos del repo
-                # ─────────────────────────────────────────────
+                # Documentos de Arquitectura
                 if extension in [".txt", ".pdf", ".docx"]:
                     file_data = get_repo_file_bytes(request.repo_url, file_path)
-                    texto_extraido = extraer_texto_por_extension(
-                        file_data["content_bytes"],
-                        extension
-                    )
-
-                    # Los documentos NO pasan por sandbox de código
+                    texto_extraido = extraer_texto_por_extension(file_data["content_bytes"], extension)
                     workspace.add_file(session_id, file_path, texto_extraido)
-
-                # ─────────────────────────────────────────────
-                # Flujo normal para código y texto plano
-                # ─────────────────────────────────────────────
+                    bundle_completo[file_path] = texto_extraido
+                
+                # Código Fuente (Pasa por el Sandbox)
                 else:
                     file_data = get_file_content(request.repo_url, file_path)
                     contenido_seguro = sandbox_check(file_path, file_data["content"])
                     workspace.add_file(session_id, file_path, contenido_seguro)
+                    bundle_completo[file_path] = contenido_seguro
 
-                findings_del_archivo = []
-
-                # 🧠 ENRUTADOR INTELIGENTE
-                for categoria, archivos_marcados in request.selected_files_by_category.items():
-                    if file_path in archivos_marcados:
-                        url_destino = URLS_IA.get(categoria)
-
-                        if url_destino:
-                            hallazgos = analizar_con_ia_externa(
-                                session_id,
-                                file_path,
-                                workspace,
-                                url_destino,
-                                categoria
-                            )
-                            findings_del_archivo.extend(hallazgos)
-                        else:
-                            findings_del_archivo.append({
-                                "file_path": file_path,
-                                "type": categoria,
-                                "severity": "info",
-                                "title": f"Análisis de {categoria} Pendiente",
-                                "description": "Modelo en desarrollo.",
-                                "recommendation": "Respuesta simulada para pruebas.",
-                                "original_code": "",
-                                "secure_code": "",
-                                "line": 0
-                            })
-
-                ai_responses.append({
-                    "analyzed": True,
-                    "file_path": file_path,
-                    "findings": findings_del_archivo
-                })
-
-            except (DocumentParserError, SandboxViolation, ValueError, LLMTimeoutError, LLMServiceError) as e:
-                skipped_files.append({
-                    "file_path": file_path,
-                    "reason": str(e)
-                })
-
+            except (DocumentParserError, SandboxViolation, ValueError) as e:
+                skipped_files.append({"file_path": file_path, "reason": str(e)})
             except Exception as e:
-                skipped_files.append({
-                    "file_path": file_path,
-                    "reason": str(e)
-                })
+                skipped_files.append({"file_path": file_path, "reason": str(e)})
+
+        # 2. 🧠 ENRUTADOR INTELIGENTE POR LOTES (Batch Router)
+        hallazgos_globales = []
+        
+        for categoria, archivos_marcados in request.selected_files_by_category.items():
+            url_destino = URLS_IA.get(categoria)
+            
+            # Filtramos solo los archivos de ESTA categoría que sobrevivieron al Sandbox
+            bundle_categoria = {
+                fp: bundle_completo[fp] 
+                for fp in archivos_marcados 
+                if fp in bundle_completo
+            }
+            
+            # Si hay archivos para esta categoría y la API de Jorge existe
+            if bundle_categoria and url_destino:
+
+             # 🔀 CAMINO A: Reglas de Negocio (Necesita los PDFs)
+             if categoria == "business_rules":
+                 # Filtramos de la RAM solo los archivos que sean texto/documentos
+                 docs_arquitectura = {k: v for k, v in bundle_completo.items() if k.lower().endswith(('.txt', '.pdf', '.docx'))}
+                 texto_reglas = "\n\n".join(docs_arquitectura.values())
+                 print(f"DEBUG REGLAS: Se enviarán {len(texto_reglas)} caracteres de reglas de arquitectura.")
+                 hallazgos_cat = analizar_reglas_negocio(
+                     session_id,
+                     bundle_categoria,
+                     texto_reglas,
+                     url_destino
+                 )
+
+             # 🔀 CAMINO B: Seguridad y los demás (Solo necesitan el código)
+             else:
+                 hallazgos_cat = analizar_proyecto_completo(
+                     session_id,
+                     bundle_categoria,
+                     url_destino,
+                     categoria
+                 )
+
+             hallazgos_globales.extend(hallazgos_cat)
+             
+            elif bundle_categoria and not url_destino:
+                # 🚧 MOCK: Para las categorías que Jorge aún no termina
+                for fp in bundle_categoria.keys():
+                    hallazgos_globales.append({
+                        "file_path": fp,
+                        "type": categoria,
+                        "severity": "info",
+                        "title": f"Análisis de {categoria} Pendiente",
+                        "description": "Modelo en desarrollo. Respuesta simulada.",
+                        "recommendation": "Mock para mantener el flujo.",
+                        "original_code": "",
+                        "secure_code": "",
+                        "line": 0
+                    })
+
+        # 3. EMPAQUETADO PARA TU FUNCIÓN 'consolidate_results'
+        # Agrupamos los hallazgos por archivo para no romper tu lógica original
+        ai_responses_dict = {fp: [] for fp in bundle_completo.keys()}
+        for h in hallazgos_globales:
+            fp = h.get("file_path", "Global/Multiple")
+            if fp in ai_responses_dict:
+                ai_responses_dict[fp].append(h)
+            else:
+                ai_responses_dict[fp] = [h]
+
+        ai_responses = [
+            {"analyzed": True, "file_path": fp, "findings": fnd} 
+            for fp, fnd in ai_responses_dict.items()
+        ]
 
         reporte_final = consolidate_results(
             ai_responses=ai_responses,
@@ -174,12 +196,11 @@ def analyze(request: RepoRequest):
         )
 
         reporte_final["session_id"] = session_id
-
         return reporte_final
 
     except Exception as e:
-        print(f"🛑 ERROR CRÍTICO EN CONSOLIDACIÓN: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error al armar el reporte: {str(e)}")
+        print(f"🛑 ERROR CRÍTICO EN ANALYZE: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error interno: {str(e)}")
 
 
 @app.post("/apply-patches")

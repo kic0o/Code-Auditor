@@ -4,7 +4,8 @@ import {
   CheckCircle, AlertCircle, ArrowLeft, Zap, ShieldAlert, Info, ExternalLink, X,
   Check
 } from 'lucide-react';
- 
+
+
 // ── CONFIGURACIÓN ──────────────────────────────────────────────────────────
 const REVIEW_UPLOAD_CONFIG = {
   documentation: {
@@ -103,7 +104,7 @@ const ScoreRing = ({ score }) => {
 const App = () => {
   const [view, setView] = useState('setup');
   const [wizardStep, setWizardStep] = useState(1);
- 
+  const [currentlyAnalyzingCategory, setCurrentlyAnalyzingCategory] = useState('');
   const [repoUrl, setRepoUrl] = useState('');
   const [repoFiles, setRepoFiles] = useState([]);
   const [selectedFileMatrix, setSelectedFileMatrix] = useState(createEmptyCategorySelection);
@@ -115,7 +116,8 @@ const App = () => {
   const [uploadedDocs, setUploadedDocs] = useState([]);
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
   const fileInputRef = useRef(null);
- 
+  // Nuevo estado para recordar qué llamadas a Azure ya hicimos
+  const [fetchedCategories, setFetchedCategories] = useState(new Set());
   const [currentReviewIndex, setCurrentReviewIndex] = useState(0);
   const [findingDecisions, setFindingDecisions] = useState({});
   const [isSendingToBackend, setIsSendingToBackend] = useState(false);
@@ -123,93 +125,101 @@ const App = () => {
   const getFindingId = (finding, index) => `${finding.file_path}-${finding.type}-${index}`;
  
   // ── MEMOS ──────────────────────────────────────────────────────────────
-  const uniqueTypes = useMemo(() => {
-    if (!analysisResult) return ['all'];
-    return ['all', ...new Set(analysisResult.findings.map(f => f.type))];
-  }, [analysisResult]);
- 
+  
+  // 1. Contadores de la Matriz (Para que el Paso 2 no falle)
   const selectedFilesCount = useMemo(() => {
     const u = new Set();
     ANALYSIS_CATEGORIES.forEach(c => selectedFileMatrix[c.id].forEach(p => u.add(p)));
     return u.size;
   }, [selectedFileMatrix]);
- 
+
   const totalSelectionsCount = useMemo(() =>
     ANALYSIS_CATEGORIES.reduce((t, c) => t + selectedFileMatrix[c.id].size, 0),
   [selectedFileMatrix]);
- 
+
   const categorySelectionCounts = useMemo(() =>
     ANALYSIS_CATEGORIES.reduce((acc, c) => { acc[c.id] = selectedFileMatrix[c.id].size; return acc; }, {}),
   [selectedFileMatrix]);
- 
-  const normalizeFindingCategory = (finding) => {
-    const direct = finding.category || finding.analysis_category || finding.review_category || finding.aspect;
-    if (direct) return direct;
-    const text = [finding.type, finding.title, finding.description, finding.recommendation].filter(Boolean).join(' ').toLowerCase();
-    if (/(auth|token|xss|sql|csrf|secure|security|encrypt|vulnerab|injection)/.test(text)) return 'security';
-    if (/(clean code|best practice|naming|refactor|readability|maintainab|standard|convention)/.test(text)) return 'best_practices';
-    if (/(logic|workflow|algorithm|condition|branch|state|flow|business process)/.test(text)) return 'software_logic';
-    return 'business_rules';
-  };
- 
+
+  // 2. Resultados Secuenciales y Aplanados
+  const allFindings = useMemo(() => {
+    const raw = analysisResult?.findings || [];
+    
+    // Normalización total: No importa qué mande Jorge, el front lo estandariza
+    return raw.map(f => ({
+      ...f,
+      file_path: f.file_path || f.file || f.archivo || "Global/Multiple",
+      description: f.description || f.sugerencia || f.explanation || "Revisar código.",
+      recommendation: f.recommendation || f.sugerencia || "Sugerencia no proporcionada.",
+      original_code: f.original_code || f.codigo_original || "",
+      secure_code: f.secure_code || f.codigo_corregido || "",
+      type: f.type || 'business_rules', // Forzamos un tipo base si no viene
+      severity: 'critical' // Forzamos severidad única para evitar errores de lógica
+    }));
+  }, [analysisResult]);
+  const uniqueTypes = useMemo(() => {
+    if (allFindings.length === 0) return ['all'];
+    return ['all', ...new Set(allFindings.map(f => f.type))];
+  }, [allFindings]);
+
   const findingsByCategory = useMemo(() => {
     const empty = ANALYSIS_CATEGORIES.reduce((acc, c) => { acc[c.id] = []; return acc; }, {});
-    if (!analysisResult?.findings) return empty;
-    return analysisResult.findings.reduce((acc, f) => {
-      const cat = normalizeFindingCategory(f);
-      const safe = ANALYSIS_CATEGORIES.some(c => c.id === cat) ? cat : 'business_rules';
-      acc[safe].push(f);
+    if (allFindings.length === 0) return empty;
+    
+    return allFindings.reduce((acc, f) => {
+      if (acc[f.type]) acc[f.type].push(f);
       return acc;
     }, empty);
-  }, [analysisResult]);
- 
-  // Estadísticas globales
-  const reportStats = useMemo(() => {
-    if (!analysisResult?.findings) return { critical: 0, warning: 0, info: 0, affectedFiles: 0, affectedPct: 0 };
-    const findings = analysisResult.findings;
-    const critical = findings.filter(f => f.severity === 'critical').length;
-    const warning  = findings.filter(f => f.severity === 'warning').length;
-    const info     = findings.filter(f => f.severity === 'info').length;
-    const affectedFiles = new Set(findings.map(f => f.file_path).filter(Boolean)).size;
-    const totalFiles = analysisResult.files_analyzed || 1;
-    return { critical, warning, info, affectedFiles, affectedPct: Math.round((affectedFiles / totalFiles) * 100) };
-  }, [analysisResult]);
- 
-  // Estadísticas por categoría
+  }, [allFindings]);
+
   const categoryStats = useMemo(() =>
     ANALYSIS_CATEGORIES.reduce((acc, cat) => {
-      const findings = findingsByCategory[cat.id] || [];
-      acc[cat.id] = {
-        critical: findings.filter(f => f.severity === 'critical').length,
-        warning:  findings.filter(f => f.severity === 'warning').length,
-        info:     findings.filter(f => f.severity === 'info').length,
-        total:    findings.length,
-      };
+      acc[cat.id] = { total: (findingsByCategory[cat.id] || []).length };
       return acc;
     }, {}),
   [findingsByCategory]);
- 
+
+  const reportStats = useMemo(() => {
+    if (allFindings.length === 0) return { affectedFiles: 0, affectedPct: 0 };
+    const affectedFiles = new Set(allFindings.map(f => f.file_path).filter(Boolean)).size;
+    const totalFiles = analysisResult?.total_files || 1;
+    return { affectedFiles, affectedPct: Math.round((affectedFiles / totalFiles) * 100) };
+  }, [allFindings, analysisResult]);
+
+  // 3. Variables de la vista activa (Para que ResultsView no dé pantalla blanca)
   const currentReviewCategory = ANALYSIS_CATEGORIES[currentReviewIndex];
- 
+
   const currentCategoryFindings = useMemo(() => {
     if (!currentReviewCategory) return [];
-    return findingsByCategory[currentReviewCategory.id].filter(f => {
-      const matchSeverity = filterSeverity === 'all' || f.severity === filterSeverity;
-      const matchType = filterType === 'all' || f.type === filterType;
-      return matchSeverity && matchType;
-    });
-  }, [currentReviewCategory, findingsByCategory, filterSeverity, filterType]);
- 
+    return findingsByCategory[currentReviewCategory.id] || [];
+  }, [currentReviewCategory, findingsByCategory]);
+
+  // ── LOGICA DE ESTADO CORREGIDA ──────────────────────────────────────────
+
   const isCategoryCompleted = (categoryId) => {
+    // 1. Si el usuario no seleccionó archivos para esta categoría, cuenta como "lista" (vacía)
+    if (selectedFileMatrix[categoryId].size === 0) return true;
+
+    // 2. IMPORTANTE: Si seleccionó archivos pero aún no hemos llamado a la API, NO está completada
+    if (!fetchedCategories.has(categoryId)) return false;
+
     const findings = findingsByCategory[categoryId] || [];
+    
+    // 3. Si ya llamamos a la API y devolvió 0 errores, está completada (limpia)
     if (findings.length === 0) return true;
+
+    // 4. Si hay errores, solo está completada si el usuario ya tomó una decisión en TODOS
     return findings.every((f, i) => findingDecisions[getFindingId(f, i)] !== undefined);
   };
- 
-  const reviewCompleted = useMemo(() =>
-    ANALYSIS_CATEGORIES.every(c => isCategoryCompleted(c.id)),
-  [findingDecisions, findingsByCategory]);
- 
+
+  // El reporte final solo se muestra si todas las categorías SELECCIONADAS fueron procesadas
+  const reviewCompleted = useMemo(() => {
+    const selectedCategories = ANALYSIS_CATEGORIES.filter(c => selectedFileMatrix[c.id].size > 0);
+    if (selectedCategories.length === 0) return false;
+    
+    return selectedCategories.every(c => isCategoryCompleted(c.id));
+  }, [findingDecisions, findingsByCategory, fetchedCategories, selectedFileMatrix]);
+  
   // ── HANDLERS ───────────────────────────────────────────────────────────
   const handleConnect = async () => {
     if (!repoUrl) { alert("⚠️ Por favor, ingresa una URL de GitHub primero."); return; }
@@ -223,12 +233,29 @@ const App = () => {
       if (!response.ok) throw new Error(`Error ${response.status}`);
       const data = await response.json();
       const lista = data.files || data.archivos || [];
-      const mapeados = lista.map(a => typeof a === 'string'
-        ? { path: a, extension: `.${a.split('.').pop()}` }
-        : { path: a.path, extension: a.extension });
+      
+      // 🛡️ MAPEO A PRUEBA DE BALAS
+      const mapeados = lista.map(a => {
+        // 1. Aseguramos extraer la ruta (path) sea un string o un objeto
+        const filePath = typeof a === 'string' ? a : a.path;
+        
+        // 2. Extraemos la extensión de forma matemática partiendo el string
+        const parts = filePath.split('.');
+        
+        // 3. Si tiene extensión (ej. main.py) la usamos. Si es un archivo sin 
+        // extensión (ej. un 'Dockerfile' o 'LICENSE'), le asignamos '.txt' por defecto
+        const extensionSegura = parts.length > 1 ? `.${parts.pop()}` : '.txt';
+        
+        return { 
+          path: filePath, 
+          extension: extensionSegura 
+        };
+      });
+
       setRepoFiles(mapeados);
       setSelectedFileMatrix(createEmptyCategorySelection());
       setWizardStep(2);
+
     } catch (err) {
       setError("No se pudo conectar con el backend. Verifica que la URL sea válida.");
     } finally {
@@ -236,33 +263,107 @@ const App = () => {
     }
   };
  
-  const startAnalysis = async () => {
-    const byCategory = ANALYSIS_CATEGORIES.reduce((acc, c) => {
-      acc[c.id] = Array.from(selectedFileMatrix[c.id]); return acc;
-    }, {});
-    const unique = Array.from(new Set(Object.values(byCategory).flat()));
-    if (unique.length === 0) return;
-    if (unique.length > 10) { setError(`Máximo 10 archivos (tienes ${unique.length}).`); return; }
-    setView('analyzing'); setWizardStep(3); setError(null);
+  // 1. EL MOTOR INDIVIDUAL: Solo le pide a Azure los datos de la pestaña actual
+  // 1. EL MOTOR INDIVIDUAL (CON RAYOS X ☢️)
+  const fetchCategoryData = async (index) => {
+    const category = ANALYSIS_CATEGORIES[index];
+    const filesForThisCat = Array.from(selectedFileMatrix[category.id]);
+
+    setView('analyzing');
+    setCurrentlyAnalyzingCategory(category.label);
+
+    console.log(`🚀 [PASO 1] Solicitando análisis para: ${category.label}`);
+    console.log(`📄 Archivos enviados en el Súper JSON:`, filesForThisCat);
+
     try {
       const response = await fetch("http://127.0.0.1:8000/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ repo_url: repoUrl, selected_files: unique, selected_files_by_category: byCategory }),
+        body: JSON.stringify({
+          repo_url: repoUrl,
+          selected_files: filesForThisCat,
+          selected_files_by_category: { [category.id]: filesForThisCat }
+        }),
       });
-      if (!response.ok) {
-        const err = await response.json().catch(() => null);
-        throw new Error(err?.detail || `Error ${response.status}`);
+
+      if (response.ok) {
+        const data = await response.json();
+        console.log(`📦 [PASO 2] Respuesta exitosa del Backend para ${category.label}:`, data);
+
+        let catFindings = [];
+        if (Array.isArray(data.findings)) catFindings = data.findings;
+        else if (Array.isArray(data.ai_responses)) {
+          catFindings = data.ai_responses.flatMap(r => r.findings || r.issues || []);
+        }
+
+        console.log(`🎯 [PASO 3] Vulnerabilidades crudas encontradas por Jorge:`, catFindings);
+
+        const normalized = catFindings.map(f => ({
+          ...f,
+          file_path: f.file_path || f.file || f.archivo || "Global/Multiple",
+          description: f.description || f.sugerencia || f.explanation || "Revisar código.",
+          recommendation: f.recommendation || f.sugerencia || "Sugerencia no proporcionada.",
+          original_code: f.original_code || f.codigo_original || "",
+          secure_code: f.secure_code || f.codigo_corregido || "",
+          type: category.id,
+          severity: 'critical'
+        }));
+
+        setAnalysisResult(prev => ({
+          session_id: data.session_id || prev?.session_id || "sesion-" + Date.now(),
+          total_files: (prev?.total_files || 0) + filesForThisCat.length,
+          findings: [...(prev?.findings || []), ...normalized]
+        }));
+      } else {
+        // 🔥 SI EL BACKEND EXPLOTA, AHORA NOS AVISARÁ
+        const errorText = await response.text();
+        console.error(`🛑 [ERROR HTTP] El backend falló con código ${response.status}:`, errorText);
+        alert(`🚨 Error del backend en ${category.label}:\nRevisa la consola (F12) o la terminal de Python para ver el error exacto.`);
       }
-      const data = await response.json();
-      setAnalysisResult(data);
-      setCurrentReviewIndex(0);
-      setFindingDecisions({});
-      setView('results');
-      setWizardStep(4); // Entra a revisión de categoría 1
     } catch (err) {
-      setError(`Error del backend: ${err.message}`);
-      setView('setup'); setWizardStep(2);
+      console.error(`🛑 [ERROR DE RED] No se pudo conectar con el servidor:`, err);
+      alert(`🚨 Falló la conexión con el servidor en ${category.label}. ¿Está prendido Uvicorn?`);
+    }
+
+    setFetchedCategories(prev => new Set(prev).add(category.id));
+    setView('results');
+  };
+
+  // 2. EL BOTÓN INICIAR: Busca la primera categoría que el usuario quiso analizar
+  const startAnalysis = async () => {
+    const firstIndex = ANALYSIS_CATEGORIES.findIndex(c => selectedFileMatrix[c.id].size > 0);
+    if (firstIndex === -1) return; // Si no seleccionó nada, no hace nada
+
+    // Limpiamos la mesa para un análisis nuevo
+    setAnalysisResult({ session_id: null, total_files: 0, findings: [] });
+    setFetchedCategories(new Set());
+    setFindingDecisions({});
+    setCurrentReviewIndex(firstIndex);
+    setWizardStep(4);
+
+    // Llamamos a Azure SOLO para esa primera categoría
+    await fetchCategoryData(firstIndex);
+  };
+
+  // 3. EL BOTÓN SIGUIENTE: Brinca categorías vacías y llama a Azure justo a tiempo
+  const advanceToNextCategory = async () => {
+    let nextIndex = currentReviewIndex + 1;
+
+    // MAGIA: Saltamos automáticamente las categorías donde el usuario NO metió archivos
+    while (nextIndex < ANALYSIS_CATEGORIES.length && selectedFileMatrix[ANALYSIS_CATEGORIES[nextIndex].id].size === 0) {
+      nextIndex++;
+    }
+
+    if (nextIndex < ANALYSIS_CATEGORIES.length) {
+      setCurrentReviewIndex(nextIndex);
+      const nextCatId = ANALYSIS_CATEGORIES[nextIndex].id;
+
+      // Si es la primera vez que entramos a esta categoría, llamamos a Azure
+      if (!fetchedCategories.has(nextCatId)) {
+        await fetchCategoryData(nextIndex);
+      }
+    } else {
+      // Ya no hay más categorías, React mostrará la pantalla de "Auditoría Completada"
     }
   };
  
@@ -271,15 +372,6 @@ const App = () => {
     setSelectedFileMatrix(createEmptyCategorySelection()); setRepoUrl('');
     setAnalysisResult(null); setUploadedDocs([]);
     setCurrentReviewIndex(0); setFindingDecisions({});
-  };
- 
-  // Avanzar categoría de revisión → también avanza el wizard
-  const advanceToNextCategory = () => {
-    const next = currentReviewIndex + 1;
-    if (next < ANALYSIS_CATEGORIES.length) {
-      setCurrentReviewIndex(next);
-      setWizardStep(4 + next); // pasos 4,5,6,7
-    }
   };
  
   // Navegar a categoría desde el sidebar
@@ -596,44 +688,18 @@ const App = () => {
           </div>
  
           {/* Barra de 5 métricas */}
-          <div className="grid grid-cols-2 md:grid-cols-5 divide-x divide-slate-100 border-t border-slate-100">
-            <div className="flex flex-col items-center justify-center py-6 px-4 md:col-span-1">
-              <ScoreRing score={analysisResult.total_score} />
+          <div className="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-slate-100 border-t border-slate-100">
+            <div className="flex flex-col items-center justify-center py-6 px-4">
+              <ScoreRing score={analysisResult.total_score || 100} />
               <p className="text-[14px] font-black text-slate-400 uppercase tracking-widest mt-2">Score Global</p>
             </div>
-            <div className="flex flex-col items-center justify-center py-6 px-4 gap-1">
-              <div className="w-10 h-10 rounded-2xl bg-red-50 border border-red-100 flex items-center justify-center mb-1">
-                <ShieldAlert size={18} className="text-red-500" />
-              </div>
-              <span className="text-5xl font-black text-red-600">{reportStats.critical}</span>
-              <span className="text-[14px] font-bold text-slate-400 uppercase tracking-wide">Críticos</span>
-            </div>
-            <div className="flex flex-col items-center justify-center py-6 px-4 gap-1">
-              <div className="w-10 h-10 rounded-2xl bg-amber-50 border border-amber-100 flex items-center justify-center mb-1">
-                <AlertCircle size={18} className="text-amber-500" />
-              </div>
-              <span className="text-5xl font-black text-amber-600">{reportStats.warning}</span>
-              <span className="text-[14px] font-bold text-slate-400 uppercase tracking-wide">Advertencias</span>
-            </div>
-            <div className="flex flex-col items-center justify-center py-6 px-4 gap-1">
-              <div className="w-10 h-10 rounded-2xl bg-blue-50 border border-blue-100 flex items-center justify-center mb-1">
-                <Info size={18} className="text-blue-500" />
-              </div>
-              <span className="text-5xl font-black text-blue-600">{reportStats.info}</span>
-              <span className="text-[14px] font-bold text-slate-400 uppercase tracking-wide">Informativos</span>
-            </div>
-            <div className="flex flex-col items-center justify-center py-6 px-4 gap-1">
-              <div className="w-10 h-10 rounded-2xl bg-slate-100 border border-slate-200 flex items-center justify-center mb-1">
-                <FileText size={18} className="text-slate-500" />
+            <div className="flex flex-col items-center justify-center py-6 px-4">
+              <div className="w-12 h-12 rounded-2xl bg-blue-50 border border-blue-100 flex items-center justify-center mb-2">
+                <FileText size={24} className="text-blue-500" />
               </div>
               <span className="text-5xl font-black text-slate-700">{reportStats.affectedFiles}</span>
-              <span className="text-[14px] font-bold text-slate-400 uppercase tracking-wide">Afectados</span>
-              <div className="w-full mt-1 px-2">
-                <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                  <div className="h-full bg-slate-400 rounded-full transition-all duration-700" style={{ width: `${reportStats.affectedPct}%` }} />
-                </div>
-                <p className="text-[13px] text-slate-400 text-center mt-0.5">{reportStats.affectedPct}% del total</p>
-              </div>
+              <span className="text-[14px] font-bold text-slate-400 uppercase tracking-wide">Archivos Afectados</span>
+              <p className="text-[13px] text-slate-400 text-center mt-1">{reportStats.affectedPct}% del proyecto total</p>
             </div>
           </div>
         </div>
@@ -677,40 +743,13 @@ const App = () => {
                     </div>
  
                     {/* Chips de severidad */}
-                    <div className="flex items-center gap-2 mb-2">
-                      {stats.critical > 0 && (
-                        <span className="flex items-center gap-1 text-[14px] font-bold text-red-600 bg-red-50 px-2 py-0.5 rounded-lg">
-                          <ShieldAlert size={9} /> {stats.critical}
-                        </span>
+                    <div className="pl-[42px]">
+                      {stats.total > 0 ? (
+                        <span className="text-[14px] font-bold text-slate-500">{stats.total} problemas detectados</span>
+                      ) : (
+                        <span className="text-[14px] font-bold text-green-500">Todo en orden ✓</span>
                       )}
-                      {stats.warning > 0 && (
-                        <span className="flex items-center gap-1 text-[14px] font-bold text-amber-600 bg-amber-50 px-2 py-0.5 rounded-lg">
-                          <AlertCircle size={9} /> {stats.warning}
-                        </span>
-                      )}
-                      {stats.info > 0 && (
-                        <span className="flex items-center gap-1 text-[14px] font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded-lg">
-                          <Info size={9} /> {stats.info}
-                        </span>
-                      )}
-                      {stats.total === 0 && <span className="text-[14px] font-bold text-slate-400">Sin hallazgos</span>}
                     </div>
- 
-                    {/* Barra tricolor */}
-                    {stats.total > 0 && (
-                      <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                        <div className="h-full flex">
-                          <div className="bg-red-400 h-full" style={{ width: `${(stats.critical / stats.total) * 100}%` }} />
-                          <div className="bg-amber-400 h-full" style={{ width: `${(stats.warning / stats.total) * 100}%` }} />
-                          <div className="bg-blue-400 h-full" style={{ width: `${(stats.info / stats.total) * 100}%` }} />
-                        </div>
-                      </div>
-                    )}
-                    {stats.total === 0 && (
-                      <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                        <div className="h-full bg-green-400 w-full" />
-                      </div>
-                    )}
                   </button>
                 );
               })}
@@ -724,48 +763,20 @@ const App = () => {
               {!reviewCompleted ? (
                 <>
                   {/* Header de categoría activa con sus conteos */}
-                  <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+                  <div className="border-b border-slate-100 pb-5 mb-5 flex flex-col md:flex-row md:justify-between md:items-end gap-4">
                     <div>
-                      <p className="text-[14px] font-black uppercase tracking-[0.2em] text-slate-400">Revisión Actual</p>
-                      <h3 className="text-5xl font-black text-slate-900 tracking-tight">{activeCategory.label}</h3>
-                      <p className="text-lg text-slate-400">Evalúa cada hallazgo y decide si aceptas la corrección.</p>
+                      <p className="text-[14px] font-black uppercase tracking-[0.2em] text-blue-500 mb-1">
+                        Revisión en progreso
+                      </p>
+                      <h3 className="text-4xl font-black text-slate-900 tracking-tight">
+                        {activeCategory.label}
+                      </h3>
                     </div>
-                    <div className="flex gap-3 flex-shrink-0">
-                      <div className="rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-center">
-                        <p className="text-[13px] font-black uppercase tracking-wide text-red-400">Críticos</p>
-                        <p className="text-xl font-bold text-red-600">{categoryStats[activeCategory.id].critical}</p>
-                      </div>
-                      <div className="rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3 text-center">
-                        <p className="text-[13px] font-black uppercase tracking-wide text-amber-400">Alertas</p>
-                        <p className="text-xl font-bold text-amber-600">{categoryStats[activeCategory.id].warning}</p>
-                      </div>
-                      <div className="rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3 text-center">
-                        <p className="text-[13px] font-black uppercase tracking-wide text-blue-400">Info</p>
-                        <p className="text-xl font-bold text-blue-600">{categoryStats[activeCategory.id].info}</p>
-                      </div>
+                    <div className="text-left md:text-right bg-slate-50 border border-slate-100 px-4 py-2 rounded-xl">
+                      <span className="text-[15px] font-bold text-slate-500 uppercase tracking-widest">
+                        {currentCategoryFindings.length} hallazgo{currentCategoryFindings.length !== 1 ? 's' : ''} en total
+                      </span>
                     </div>
-                  </div>
- 
-                  {/* Filtros */}
-                  <div className="flex flex-wrap gap-3 items-center bg-slate-50 p-4 rounded-2xl border border-slate-100">
-                    <div className="flex items-center gap-2">
-                      <span className="text-[14px] font-black text-slate-400 uppercase">Severidad:</span>
-                      <select value={filterSeverity} onChange={e => setFilterSeverity(e.target.value)}
-                        className="text-base font-bold bg-white border border-slate-200 rounded-xl px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500/20">
-                        <option value="all">Todos</option>
-                        <option value="critical">Críticos</option>
-                        <option value="warning">Advertencias</option>
-                        <option value="info">Informativos</option>
-                      </select>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-[14px] font-black text-slate-400 uppercase">Tipo:</span>
-                      <select value={filterType} onChange={e => setFilterType(e.target.value)}
-                        className="text-base font-bold bg-white border border-slate-200 rounded-xl px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500/20">
-                        {uniqueTypes.map(t => <option key={t} value={t}>{t === 'all' ? 'Todos los tipos' : t}</option>)}
-                      </select>
-                    </div>
-                    <span className="text-[14px] text-slate-400 ml-auto">{currentCategoryFindings.length} hallazgo{currentCategoryFindings.length !== 1 ? 's' : ''}</span>
                   </div>
  
                   {/* ── TARJETAS DE HALLAZGOS MEJORADAS ── */}
@@ -952,7 +963,7 @@ const App = () => {
                       <p className="text-[14px] font-bold text-slate-400 uppercase mt-0.5">Total Rechazados</p>
                     </div>
                     <div className="text-center">
-                      <span className="text-5xl font-black text-slate-700">{analysisResult.findings?.length || 0}</span>
+                      <span className="text-5xl font-black text-slate-700">{allFindings.length || 0}</span>
                       <p className="text-[14px] font-bold text-slate-400 uppercase mt-0.5">Total Hallazgos</p>
                     </div>
                   </div>
@@ -994,8 +1005,10 @@ const App = () => {
               </div>
             </div>
             <div className="text-center">
-              <h2 className="text-6xl font-black text-slate-800 tracking-tight italic">Analizando Matriz...</h2>
-              <p className="text-slate-400 mt-2 font-medium">Procesando {selectedFilesCount} archivos en {totalSelectionsCount} asignaciones.</p>
+              <h2 className="text-6xl font-black text-slate-800 tracking-tight italic transition-all">
+                Analizando {currentlyAnalyzingCategory}...
+              </h2>
+              <p className="text-slate-400 mt-4 font-medium text-lg">Por favor espera, conectando con Azure por lotes.</p>
             </div>
           </div>
         )}
