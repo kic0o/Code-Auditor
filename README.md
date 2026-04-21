@@ -2,6 +2,7 @@
 
 Herramienta web que analiza la calidad, seguridad y coherencia arquitectónica de repositorios de GitHub de forma automatizada usando inteligencia artificial.
 
+
 ---
 
 ## ✨ ¿Qué hace?
@@ -154,3 +155,5 @@ code-auditor/
 - **Nunca subas tu archivo `.env`** al repositorio
 - Cada integrante debe crear su propio `.env` local a partir de `.env.example`
 - Antes de trabajar siempre haz `git pull` para tener la versión más reciente
+
+Cambios para el PR
