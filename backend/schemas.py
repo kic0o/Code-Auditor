@@ -85,6 +85,7 @@ class ConsolidatedReport(BaseModel):
         default=0,
         description="Cantidad de archivos solicitados para analizar"
     )
+    session_id: str | None = None
 
 
 class ErrorResponse(BaseModel):

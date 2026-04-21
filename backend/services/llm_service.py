@@ -1,23 +1,50 @@
 import requests
 from workspace_manager import VirtualWorkspace
 
-class LLMServiceError(Exception):
+
+class LLMTimeoutError(Exception):
+    """Se lanza cuando la API externa tarda demasiado en responder."""
     pass
 
-def analizar_con_ia_externa(session_id: str, file_path: str, workspace: VirtualWorkspace, url_api: str, categoria: str):
+
+class LLMServiceError(Exception):
+    """Se lanza cuando ocurre un error general con la API externa."""
+    pass
+
+
+def analizar_con_ia_externa(
+    session_id: str,
+    file_path: str,
+    workspace: VirtualWorkspace,
+    url_api: str,
+    categoria: str
+):
     """Adaptador universal para consumir cualquier API de Jorge en Azure."""
     codigo_actual = workspace.get_file(session_id, file_path)
+
+    if codigo_actual is None:
+        raise LLMServiceError(
+            f"No se encontró el archivo '{file_path}' en el workspace para la sesión '{session_id}'."
+        )
+
     payload_jorge = {"code": codigo_actual}
-    
+
     try:
+        # Configuramos un timeout de 30 segundos
         respuesta = requests.post(url_api, json=payload_jorge, timeout=30)
-        
+
         if respuesta.status_code == 200:
-            datos = respuesta.json()
+            try:
+                datos = respuesta.json()
+            except ValueError as e:
+                raise LLMServiceError(
+                    f"La API devolvió JSON inválido para la categoría '{categoria}'."
+                ) from e
+
             hallazgos_formateados = []
-            
+
             vulnerabilidades = datos.get("vulnerabilidades", datos.get("vulnerabilities", []))
-            
+
             for item in vulnerabilidades:
                 hallazgos_formateados.append({
                     "file_path": file_path,
@@ -30,11 +57,19 @@ def analizar_con_ia_externa(session_id: str, file_path: str, workspace: VirtualW
                     "secure_code": item.get("secure_code", ""),
                     "line": 0
                 })
+
             return hallazgos_formateados
-        else:
-            print(f"❌ Error en API de Jorge ({categoria}): {respuesta.status_code}")
-            return []
-            
+
+        raise LLMServiceError(
+            f"Error en API de Azure ({categoria}): {respuesta.status_code}"
+        )
+
+    except requests.exceptions.Timeout as e:
+        raise LLMTimeoutError(
+            f"Timeout al conectar con Azure para la categoría '{categoria}'."
+        ) from e
+
     except requests.exceptions.RequestException as e:
-        print(f"❌ Error de red al conectar con Azure ({categoria}): {e}")
-        return []
+        raise LLMServiceError(
+            f"Error de red al conectar con Azure ({categoria}): {str(e)}"
+        ) from e
