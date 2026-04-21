@@ -1,32 +1,35 @@
-import sqlite3
+import json
+from app.db import get_user, create_user
+from app.utils import load_user_session
 
-DB_PATH = "app.db"
+def handle_login(request_body):
+    # FALLA: No hay manejo de excepciones si el JSON está mal formado
+    data = json.loads(request_body)
+    username = data["username"]
+    password = data["password"]
+    
+    user = get_user(username, password)
+    if user:
+        # FALLA: Retornar el objeto 'user' completo suele exponer hashes de contraseñas
+        return {"status": "ok", "user": user}
+    return {"status": "error"}
 
-def get_connection():
-    return sqlite3.connect(DB_PATH)
+def handle_register(request_body):
+    data = json.loads(request_body)
+    # FALLA: Mass Assignment - se confía ciegamente en los campos del JSON
+    create_user(data["username"], data["password"], data["email"])
+    return {"status": "created"}
 
-def get_user(username, password):
-    conn = get_connection()
-    cursor = conn.cursor()
-    # FALLA: Vulnerable a Inyección SQL
-    query = "SELECT * FROM users WHERE username='" + username + "' AND password='" + password + "'"
-    cursor.execute(query)
-    result = cursor.fetchone()
-    conn.close()
-    return result
+def handle_session(request_body):
+    data = json.loads(request_body)
+    # FALLA: Si session_token es nulo o manipulado, puede causar errores de lógica
+    session = load_user_session(data["session_token"])
+    return {"status": "ok", "session": session}
 
-def create_user(username, password, email):
-    conn = get_connection()
-    cursor = conn.cursor()
-    # FALLA: Vulnerable a Inyección SQL
-    cursor.execute("INSERT INTO users VALUES ('" + username + "', '" + password + "', '" + email + "')")
-    conn.commit()
-    conn.close()
-
-def delete_user(username):
-    conn = get_connection()
-    cursor = conn.cursor()
-    # FALLA: Vulnerable a Inyección SQL
-    cursor.execute("DELETE FROM users WHERE username='" + username + "'")
-    conn.commit()
-    conn.close()
+def handle_admin(request_body):
+    data = json.loads(request_body)
+    # FALLA CRÍTICA: Broken Object Level Authorization (BOLA) / Privilege Escalation
+    # El usuario puede simplemente enviar {"role": "admin"} en el cuerpo para entrar
+    if data.get("role") == "admin":
+        return {"status": "ok", "admin": True}
+    return {"status": "forbidden"}
