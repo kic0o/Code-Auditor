@@ -1,0 +1,29 @@
+name: Auto Pull Request
+
+on:
+  push:
+    branches:
+      - 'sprint-**'
+
+jobs:
+  auto-pr:
+    runs-on: ubuntu-latest
+    # 🔥 CRÍTICO: Le damos permiso al bot para que pueda escribir el PR
+    permissions:
+      pull-requests: write
+      contents: read
+      
+    steps:
+      - name: Checkout del código
+        uses: actions/checkout@v3
+
+      - name: Crear Pull Request usando GitHub CLI
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Intentamos crear el PR. Si ya existe uno para esta rama, no fallará.
+          gh pr create \
+            --base main \
+            --head ${{ github.ref_name }} \
+            --title "🚀 PR automático - ${{ github.ref_name }}" \
+            --body "Pull request creado automáticamente desde la rama **${{ github.ref_name }}** por el sistema de CI/CD del Code Auditor." || echo "El PR ya existe o no hay commits nuevos."
