@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 from datetime import datetime
 import os
 import requests
-
+from github import Github
 from tools.github_tool import get_repo_files, get_file_content, get_repo_file_bytes
 from schemas import ConsolidatedReport
 from utils import consolidate_results
@@ -13,8 +13,20 @@ from services.llm_service import analizar_con_ia_externa, analizar_proyecto_comp
 from services.document_parser import extraer_texto_por_extension, DocumentParserError
 from workspace_manager import VirtualWorkspace
 from sandbox import sandbox_check, SandboxViolation
+from fastapi import Query
+from fastapi import Request
+from fastapi.responses import RedirectResponse
 
+# 1. Cargamos el archivo .env a la memoria del sistema
 load_dotenv()
+
+# 2. Extraemos las variables de forma segura
+GITHUB_CLIENT_ID = os.getenv("GITHUB_CLIENT_ID")
+GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET")
+
+# 3. Pequeño seguro de vida por si alguien olvida crear el .env en producción
+if not GITHUB_CLIENT_ID or not GITHUB_CLIENT_SECRET:
+    raise RuntimeError("🚨 ERROR FATAL: Faltan las credenciales de GitHub en el archivo .env")
 
 # UNA SOLA INICIALIZACIÓN DE LA APP
 app = FastAPI(title="Code Auditor API", version="5.1.0")
@@ -135,7 +147,7 @@ def analyze(request: RepoRequest):
             # Si hay archivos para esta categoría y la API de Jorge existe
             if bundle_categoria and url_destino:
 
-             # 🔀 CAMINO A: Reglas de Negocio (Necesita los PDFs)
+             # CAMINO A: Reglas de Negocio (Necesita los PDFs)
              if categoria == "business_rules":
                  # Filtramos de la RAM solo los archivos que sean texto/documentos
                  docs_arquitectura = {k: v for k, v in bundle_completo.items() if k.lower().endswith(('.txt', '.pdf', '.docx'))}
@@ -148,7 +160,7 @@ def analyze(request: RepoRequest):
                      url_destino
                  )
 
-             # 🔀 CAMINO B: Seguridad y los demás (Solo necesitan el código)
+             # CAMINO B: Seguridad y los demás (Solo necesitan el código)
              else:
                  hallazgos_cat = analizar_proyecto_completo(
                      session_id,
@@ -202,18 +214,48 @@ def analyze(request: RepoRequest):
         print(f"🛑 ERROR CRÍTICO EN ANALYZE: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error interno: {str(e)}")
 
+def normalizar_codigo(codigo: str) -> str:
+    """Estandariza saltos de línea, espacios invisibles y elimina etiquetas de IA."""
+    if not codigo: 
+        return ""
+        
+    # 1. Adiós al bug de Windows vs Linux (forzamos todo a \n)
+    codigo = codigo.replace("\r\n", "\n").replace("\r", "\n")
+    
+    lineas = codigo.split("\n")
+    lineas_limpias = []
+    
+    for linea in lineas:
+        evaluar = linea.strip().upper()
+        
+        # 2. Destruimos cualquier etiqueta sin importar si tiene espacios extra
+        if evaluar.startswith("[INICIO_CODIGO") or \
+           evaluar.startswith("[FIN_CODIGO") or \
+           evaluar.startswith("```"):
+            continue
+            
+        # 3. rstrip() borra espacios fantasmas al final, pero conserva la indentación inicial
+        lineas_limpias.append(linea.rstrip())
+        
+    # Unimos todo en un bloque limpio
+    return "\n".join(lineas_limpias).strip()
 
 @app.post("/apply-patches")
 def apply_patches(request: ApplyPatchesRequest):
     """
-    Recibe los hallazgos que el usuario aprobó en el Frontend y
-    los aplica directamente en el Virtual Workspace.
+    1. Aplica los parches en el Virtual Workspace (RAM) limpiando la basura de la IA.
+    2. Sube los cambios a una nueva rama en GitHub para disparar el PR automático.
     """
+    print(f"🕵️‍♂️ EL SESSION_ID ACTUAL ES: {request.session_id}")
+    
     if not request.approved_findings:
         return {"message": "No se recibieron parches para aplicar.", "archivos_actualizados": []}
 
     archivos_modificados = set()
 
+    # ==========================================
+    # FASE 1: ACTUALIZAR LA MEMORIA RAM (Nivel Arquitecto)
+    # ==========================================
     try:
         for finding in request.approved_findings:
             if not finding.original_code or not finding.secure_code:
@@ -225,28 +267,84 @@ def apply_patches(request: ApplyPatchesRequest):
                 print(f"⚠️ Archivo no encontrado en workspace: {finding.file_path}")
                 continue
 
-            if finding.original_code in codigo_actual:
-                nuevo_codigo = codigo_actual.replace(finding.original_code, finding.secure_code)
+            # 🧼 1. Pasamos TODOS los actores por el Normalizador Universal
+            ram_limpia = normalizar_codigo(codigo_actual)
+            original_limpio = normalizar_codigo(finding.original_code)
+            seguro_limpio = normalizar_codigo(finding.secure_code)
 
+            # 🛡️ Protección contra falsos parches (A prueba de mayúsculas/minúsculas)
+            if seguro_limpio.upper() == "# SIN CAMBIOS" or not seguro_limpio:
+                print(f"⏩ Saltando {finding.file_path} porque no hay código de reemplazo real.")
+                continue
+
+            # 🔬 2. Reemplazo infalible
+            if original_limpio in ram_limpia:
+                # Reemplazamos sobre la RAM ya limpia, eliminando las etiquetas para siempre
+                nuevo_codigo = ram_limpia.replace(original_limpio, seguro_limpio)
                 workspace.add_file(request.session_id, finding.file_path, nuevo_codigo)
                 archivos_modificados.add(finding.file_path)
-
-                print(f"✅ Parche aplicado con éxito en: {finding.file_path}")
+                print(f"✅ Parche aplicado EXACTO en RAM: {finding.file_path}")
             else:
-                print(f"⚠️ No se pudo aplicar el parche en {finding.file_path}. El fragmento original no coincide.")
-
-        return {
-            "message": "Parches aplicados correctamente en el entorno virtual.",
-            "archivos_actualizados": list(archivos_modificados)
-        }
+                print(f"⚠️ Fragmento no coincide en {finding.file_path}. Difiere la estructura del LLM.")
 
     except Exception as e:
-        print(f"🛑 ERROR AL APLICAR PARCHES: {str(e)}")
+        print(f"🛑 ERROR AL APLICAR PARCHES EN RAM: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Error interno al modificar el workspace: {str(e)}"
         )
 
+    # ==========================================
+    # FASE 2: SUBIR A GITHUB (Para despertar a auto-pr.yml)
+    # ==========================================
+    if archivos_modificados:
+        try:
+            # ⚠️ IMPORTANTE: Pon aquí tus datos reales ⚠️
+            token_github = "ghp_PON_TU_TOKEN_AQUI"
+            nombre_repo = "TuUsuario/TuRepositorio"
+            
+            g = Github(token_github)
+            repo = g.get_repo(nombre_repo)
+            
+            # Creamos una rama con el prefijo "sprint-" exigido por auto-pr.yml
+            timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M")
+            nueva_rama = f"sprint-fixes-{timestamp}"
+            
+            commit_base = repo.get_branch("main").commit
+            repo.create_git_ref(ref=f"refs/heads/{nueva_rama}", sha=commit_base.sha)
+            
+            for file_path in archivos_modificados:
+                # Sacamos el código YA PARCHADO y limpio de tu RAM
+                codigo_fresco = workspace.get_file(request.session_id, file_path)
+                
+                # Obtenemos el SHA del archivo original en main
+                file_contents = repo.get_contents(file_path, ref="main")
+                
+                repo.update_file(
+                    path=file_contents.path,
+                    message=f"🤖 IA Fix aplicado en {file_path}",
+                    content=codigo_fresco,
+                    sha=file_contents.sha,
+                    branch=nueva_rama
+                )
+                
+            print(f"🚀 ¡Archivos subidos a GitHub en la rama {nueva_rama}!")
+            return {
+                "message": f"Parches aplicados en RAM y PR creado en GitHub ({nueva_rama}).",
+                "archivos_actualizados": list(archivos_modificados)
+            }
+            
+        except Exception as e:
+            print(f"🛑 ERROR AL SUBIR A GITHUB: {str(e)}")
+            return {
+                "message": "Parches aplicados en RAM, pero falló la conexión con GitHub.",
+                "archivos_actualizados": list(archivos_modificados)
+            }
+
+    return {
+        "message": "No se aplicó ningún parche válido en esta ronda.",
+        "archivos_actualizados": []
+    }
 
 @app.post("/upload-doc")
 async def upload_doc(file: UploadFile = File(...)):
@@ -370,3 +468,68 @@ def analyze_step(request: StepAnalyzeRequest):
             status_code=500,
             detail=f"Error interno durante el análisis del paso: {str(e)}"
         )
+        
+@app.get("/debug/workspace/{session_id}")
+def inspeccionar_ram(session_id: str, file_path: str = Query(...)):
+    """
+    Endpoint de depuración para ver el estado actual de un archivo 
+    dentro de la memoria RAM (VirtualWorkspace).
+    """
+    try:
+        # Obtenemos el código fresco de la RAM
+        codigo_actual = workspace.get_file(session_id, file_path)
+        return {
+            "session_id": session_id,
+            "file_path": file_path,
+            "content": codigo_actual
+        }
+    except ValueError:
+        return {"error": f"El archivo {file_path} no existe en la RAM para esta sesión."}
+    
+@app.get("/login")
+def github_login():
+    """
+    PASO 1: Redirige al usuario a la pantalla verde de GitHub para que nos dé permiso.
+    """
+    # Construimos la URL de autorización
+    github_auth_url = f"https://github.com/login/oauth/authorize?client_id={GITHUB_CLIENT_ID}"
+    
+    # Mandamos al navegador web del usuario directo hacia allá
+    return RedirectResponse(url=github_auth_url)
+
+@app.get("/auth/callback")
+def github_callback(code: str):
+    """
+    PASO 2: GitHub redirige al usuario de vuelta a este endpoint con un 'code' temporal.
+    Lo intercambiamos por un Token de Acceso real y lo mandamos al Frontend.
+    """
+    token_url = "https://github.com/login/oauth/access_token"
+    
+    # Preparamos el maletín de intercambio
+    payload = {
+        "client_id": GITHUB_CLIENT_ID,
+        "client_secret": GITHUB_CLIENT_SECRET,
+        "code": code
+    }
+    
+    # Le decimos a GitHub que somos civilizados y queremos la respuesta en JSON
+    headers = {
+        "Accept": "application/json" 
+    }
+    
+    # Hacemos la petición POST a los servidores de GitHub por debajo del agua
+    respuesta = requests.post(token_url, json=payload, headers=headers)
+    datos = respuesta.json()
+    
+    if "access_token" not in datos:
+        print("🛑 Error de GitHub:", datos)
+        raise HTTPException(status_code=400, detail="No se pudo obtener el token de acceso.")
+        
+    access_token = datos["access_token"]
+    print(f"🔑 ¡Token OAuth obtenido con éxito!: {access_token[:8]}...")
+    
+    # PASO 3: Devolver al usuario al Frontend de Joshua (React)
+    # Mandamos el token en la URL para que React lo atrape y lo guarde
+    # Ajusta el puerto (ej. 5173 o 3000) según donde corra tu React
+    url_frontend = f"http://localhost:5173?github_token={access_token}"
+    return RedirectResponse(url=url_frontend)
