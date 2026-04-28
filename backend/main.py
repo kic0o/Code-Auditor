@@ -9,8 +9,7 @@ from github import Github
 from tools.github_tool import get_repo_files, get_file_content, get_repo_file_bytes
 from schemas import ConsolidatedReport
 from utils import consolidate_results
-from services.llm_service import analizar_con_ia_externa, analizar_proyecto_completo, analizar_reglas_negocio, LLMTimeoutError, LLMServiceError
-from services.document_parser import extraer_texto_por_extension, DocumentParserError
+from services.llm_service import analizar_con_ia_externa, analizar_proyecto_completo, analizar_reglas_negocio, analizar_buenas_practicas, LLMTimeoutError, LLMServiceErrorfrom services.document_parser import extraer_texto_por_extension, DocumentParserError
 from workspace_manager import VirtualWorkspace
 from sandbox import sandbox_check, SandboxViolation
 from fastapi import Query
@@ -160,6 +159,14 @@ def analyze(request: RepoRequest):
                      url_destino
                  )
 
+             # CAMINO C: Buenas Prácticas
+             elif categoria == "best_practices":
+                 hallazgos_cat = analizar_buenas_practicas(
+                     session_id,
+                     bundle_categoria,
+                     url_destino
+                 )
+
              # CAMINO B: Seguridad y los demás (Solo necesitan el código)
              else:
                  hallazgos_cat = analizar_proyecto_completo(
@@ -175,7 +182,7 @@ def analyze(request: RepoRequest):
                 # 🚧 MOCK: Para las categorías que Jorge aún no termina
                 for fp in bundle_categoria.keys():
                     hallazgos_globales.append({
-                        "file_path": fp,
+                        "file_path": fp,''
                         "type": categoria,
                         "severity": "info",
                         "title": f"Análisis de {categoria} Pendiente",

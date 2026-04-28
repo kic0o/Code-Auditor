@@ -115,3 +115,37 @@ def analizar_reglas_negocio(session_id: str, files_dict: dict, contexto_arquitec
     except Exception as e:
         print(f"🛑 Error en Reglas de Negocio: {str(e)}")
         raise LLMServiceError(f"Error en Reglas de Negocio: {str(e)}")
+    
+# ==========================================
+# 4. TRADUCTOR DE BUENAS PRÁCTICAS (clean-code)
+# ==========================================
+def analizar_buenas_practicas(session_id: str, files_dict: dict, url_api: str):
+    """Específico para Best Practices. Maneja la estructura única de clean-code API."""
+    payload = {"files": files_dict}
+
+    try:
+        print(f"🚀 Enviando Buenas Prácticas a Azure ({len(files_dict)} archivos)...")
+        respuesta = requests.post(url_api, json=payload, timeout=60, verify=False)
+        respuesta.raise_for_status()
+
+        datos = respuesta.json()
+        hallazgos_estandarizados = []
+
+        for item in datos.get("issues", []):
+            hallazgos_estandarizados.append({
+                "file_path": item.get("file", "Global"),
+                "type": "best_practices",
+                "severity": "warning",
+                "title": f"Buenas Prácticas: {item.get('category', 'General')}",
+                "description": item.get("explanation", "Sin explicación"),
+                "recommendation": item.get("recommendation", "Sin recomendación"),
+                "original_code": item.get("original_code", ""),
+                "secure_code": item.get("corrected_code", ""),  # ← mapeo clave
+                "line": item.get("line", 0)
+            })
+
+        return hallazgos_estandarizados
+
+    except Exception as e:
+        print(f"🛑 Error en Buenas Prácticas: {str(e)}")
+        raise LLMServiceError(f"Error en Buenas Prácticas: {str(e)}")
