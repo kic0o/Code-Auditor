@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 from datetime import datetime
 import os
 import requests
+import json
 from github import Github
 from tools.github_tool import get_repo_files, get_file_content, get_repo_file_bytes
 from schemas import ConsolidatedReport
@@ -45,8 +46,8 @@ workspace = VirtualWorkspace()
 URLS_IA = {
     "security": os.getenv("IA_SECURITY_URL", "https://linterlogicai.azurewebsites.net/api/security"),
     "business_rules": os.getenv("IA_RULES_URL", "https://linterlogicai.azurewebsites.net/api/analyze"),
-    "software_logic": os.getenv("IA_LOGIC_URL", ""),
-    "best_practices": os.getenv("IA_PRACTICES_URL", "")
+    "software_logic": os.getenv("IA_LOGIC_URL", "https://linterlogicai.azurewebsites.net/api/logic"),
+    "best_practices": os.getenv("IA_PRACTICES_URL", "https://linterlogicai.azurewebsites.net/api/clean-code")
 }
 
 UPLOAD_DIR = "uploads"
@@ -71,12 +72,15 @@ class ApprovedFinding(BaseModel):
 class ApplyPatchesRequest(BaseModel):
     session_id: str
     approved_findings: list[ApprovedFinding]
+    repo_name: str = None       # 🚀 NUEVO: El repo que seleccionó el usuario
+    github_token: str = None    # 🚀 NUEVO: La llave OAuth dinámica
 
 
 class StepAnalyzeRequest(BaseModel):
     session_id: str
     file_paths: list[str]
     categoria: str
+    repo_url: str = None
 
 
 @app.get("/")
@@ -295,26 +299,34 @@ def apply_patches(request: ApplyPatchesRequest):
         )
 
     # ==========================================
-    # FASE 2: SUBIR A GITHUB (Para despertar a auto-pr.yml)
+    # FASE 2: SUBIR A GITHUB (Con Token Dinámico OAuth)
     # ==========================================
     if archivos_modificados:
+        
+        # 🛡️ Validación: Si no hay llave, avisamos pero no tronamos
+        if not request.github_token or not request.repo_name:
+            print("⚠️ Faltan credenciales OAuth. Los parches solo quedaron en la RAM.")
+            return {
+                "message": "Parches aplicados en RAM. Faltan permisos de GitHub para crear el Pull Request.",
+                "archivos_actualizados": list(archivos_modificados)
+            }
+
         try:
-            # ⚠️ IMPORTANTE: Pon aquí tus datos reales ⚠️
-            token_github = "ghp_PON_TU_TOKEN_AQUI"
-            nombre_repo = "TuUsuario/TuRepositorio"
+            print(f"🚀 Conectando a GitHub con el repo: {request.repo_name}...")
             
-            g = Github(token_github)
-            repo = g.get_repo(nombre_repo)
+            # 🔑 MAGIA PURA: Usamos la llave dinámica, ¡adiós tokens quemados!
+            g = Github(request.github_token) 
+            repo = g.get_repo(request.repo_name)
             
-            # Creamos una rama con el prefijo "sprint-" exigido por auto-pr.yml
-            timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M")
+            # Creamos la rama con el prefijo "sprint-"
+            timestamp = datetime.now().strftime("%Y%m%d%H%M")
             nueva_rama = f"sprint-fixes-{timestamp}"
             
             commit_base = repo.get_branch("main").commit
             repo.create_git_ref(ref=f"refs/heads/{nueva_rama}", sha=commit_base.sha)
             
             for file_path in archivos_modificados:
-                # Sacamos el código YA PARCHADO y limpio de tu RAM
+                # Sacamos el código fresco de la RAM
                 codigo_fresco = workspace.get_file(request.session_id, file_path)
                 
                 # Obtenemos el SHA del archivo original en main
@@ -322,7 +334,7 @@ def apply_patches(request: ApplyPatchesRequest):
                 
                 repo.update_file(
                     path=file_contents.path,
-                    message=f"🤖 IA Fix aplicado en {file_path}",
+                    message=f"🤖 Fix de IA aplicado en {file_path}",
                     content=codigo_fresco,
                     sha=file_contents.sha,
                     branch=nueva_rama
@@ -330,14 +342,14 @@ def apply_patches(request: ApplyPatchesRequest):
                 
             print(f"🚀 ¡Archivos subidos a GitHub en la rama {nueva_rama}!")
             return {
-                "message": f"Parches aplicados en RAM y PR creado en GitHub ({nueva_rama}).",
+                "message": f"¡Éxito! Parches aplicados y PR en camino desde {nueva_rama}.",
                 "archivos_actualizados": list(archivos_modificados)
             }
             
         except Exception as e:
             print(f"🛑 ERROR AL SUBIR A GITHUB: {str(e)}")
             return {
-                "message": "Parches aplicados en RAM, pero falló la conexión con GitHub.",
+                "message": "Parches aplicados en RAM, pero falló la conexión al repositorio en GitHub.",
                 "archivos_actualizados": list(archivos_modificados)
             }
 
@@ -402,58 +414,123 @@ async def upload_doc(file: UploadFile = File(...)):
 def analyze_step(request: StepAnalyzeRequest):
     """
     Analiza una lista de archivos para UNA SOLA categoría específica.
-    Ideal para flujos de revisión secuencial (Wizard).
+    Crea la sesión si no existe y descarga de GitHub si la RAM está vacía.
     """
+    print(f"\n--- 🚀 INICIANDO ANÁLISIS DE CATEGORÍA: {request.categoria} ---")
     url_destino = URLS_IA.get(request.categoria)
 
     if url_destino is None:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Categoría '{request.categoria}' no es válida o no está configurada."
-        )
+        raise HTTPException(status_code=400, detail="Categoría no configurada.")
 
-    hallazgos_del_paso = []
+    # 1. SEGURIDAD DE SESIÓN: Si la sesión no existe en RAM, la creamos
+    if request.session_id not in workspace.sessions:
+        print(f"🆕 Registrando ID de sesión desconocido: {request.session_id}")
+        workspace.sessions[request.session_id] = {}
+
+    # 2. Mock si la URL está vacía
+    if url_destino == "":
+        hallazgos_mock = []
+        for fp in request.file_paths:
+            hallazgos_mock.append({
+                "file_path": fp, "type": request.categoria, "severity": "info",
+                "title": f"Análisis de {request.categoria} Pendiente",
+                "description": "Modelo en desarrollo.", "recommendation": "Respuesta simulada.",
+                "original_code": "", "secure_code": "", "line": 0
+            })
+        return {"session_id": request.session_id, "hallazgos": hallazgos_mock, "omitidos": []}
+
+    # 3. FLUJO DE CARGA (RAM + GitHub)
+    archivos_en_ram = {}
     archivos_omitidos = []
 
+    for file_path in request.file_paths:
+        try:
+            # Intentamos sacar de la RAM
+            codigo = workspace.get_file(request.session_id, file_path)
+            if not codigo or str(codigo).strip() == "": raise ValueError("Vacío")
+            archivos_en_ram[file_path] = codigo
+        except ValueError:
+            # Si no está o falló, descargamos de GitHub
+            if request.repo_url:
+                print(f"📥 Descargando {file_path} desde GitHub...")
+                try:
+                    file_data = get_file_content(request.repo_url, file_path)
+                    codigo_fresco = sandbox_check(file_path, file_data["content"])
+                    # Ahora add_file NO fallará porque aseguramos la sesión arriba
+                    workspace.add_file(request.session_id, file_path, codigo_fresco)
+                    archivos_en_ram[file_path] = codigo_fresco
+                except Exception as e:
+                    print(f"❌ Error descarga: {e}")
+                    archivos_omitidos.append({"file_path": file_path, "reason": str(e)})
+            else:
+                archivos_omitidos.append({"file_path": file_path, "reason": "No hay URL de repo"})
+
+    if not archivos_en_ram:
+        return {"session_id": request.session_id, "hallazgos": [], "omitidos": archivos_omitidos}
+
+    # 4. ENVÍO A AZURE
+    payload = {"files": archivos_en_ram}
+    print(f"📦 ENVIANDO LOTE A AZURE ({url_destino})...")
+    
     try:
-        for file_path in request.file_paths:
-            try:
-                codigo_en_ram = workspace.get_file(request.session_id, file_path)
+        respuesta = requests.post(url_destino, json=payload, timeout=90)
+        respuesta.raise_for_status()
+        datos_azure = respuesta.json()
 
-                if url_destino == "":
-                    print(f"🚧 {request.categoria} en construcción. Mockeando: {file_path}")
-                    hallazgos_del_paso.append({
-                        "file_path": file_path,
-                        "type": request.categoria,
-                        "severity": "info",
-                        "title": f"Análisis de {request.categoria} Pendiente",
-                        "description": "El modelo de IA para esta etapa aún está en desarrollo por el equipo.",
-                        "recommendation": "Respuesta simulada para mantener el flujo del sistema.",
-                        "original_code": "# Código actual...",
-                        "secure_code": "# Código actual...",
-                        "line": 0
-                    })
-                else:
-                    print(f"🚀 Disparando IA ({request.categoria}) para: {file_path}")
-                    nuevos_hallazgos = analizar_con_ia_externa(
-                        request.session_id,
-                        file_path,
-                        workspace,
-                        url_destino,
-                        request.categoria
-                    )
-                    hallazgos_del_paso.extend(nuevos_hallazgos)
+        # EXTRACTOR UNIVERSAL
+        hallazgos = []
+        if isinstance(datos_azure, list): hallazgos = datos_azure
+        elif isinstance(datos_azure, dict):
+            for key in ["findings", "vulnerabilities", "issues"]:
+                if key in datos_azure:
+                    hallazgos = datos_azure[key]
+                    break
+            if not hallazgos: # Fallback
+                for v in datos_azure.values():
+                    if isinstance(v, list): hallazgos = v; break
+        
+        print(f"✅ Análisis completado: {len(hallazgos)} hallazgos.")
+        
+        # 🧠 6. EXTRACTOR UNIVERSAL (A prueba de cambios de Jorge/Diego)
+        hallazgos_crudos = []
+        
+        if isinstance(datos_azure, list):
+            hallazgos_crudos = datos_azure
+        elif isinstance(datos_azure, dict):
+            if "findings" in datos_azure:
+                hallazgos_crudos = datos_azure["findings"]
+            elif "vulnerabilities" in datos_azure:
+                hallazgos_crudos = datos_azure["vulnerabilities"]
+            elif "issues" in datos_azure:
+                hallazgos_crudos = datos_azure["issues"]
+            else:
+                for key, value in datos_azure.items():
+                    if isinstance(value, list):
+                        hallazgos_crudos = value
+                        break
+        
+        # 🛡️ 7. FILTRO ANTI-DUPLICADOS (El escudo del Backend)
+        hallazgos_del_paso = []
+        firmas_vistas = set()
 
-            except ValueError:
-                archivos_omitidos.append({
-                    "file_path": file_path,
-                    "reason": "El archivo no está cargado en el Virtual Workspace de esta sesión."
-                })
-            except Exception as e:
-                archivos_omitidos.append({
-                    "file_path": file_path,
-                    "reason": f"Error al procesar: {str(e)}"
-                })
+        for hallazgo in hallazgos_crudos:
+            # 1. Extraemos los datos clave para identificar si es el mismo error
+            # Buscamos en las llaves que usa Joshua o las que usa Jorge
+            archivo = hallazgo.get("file", hallazgo.get("file_path", "Desconocido"))
+            linea = str(hallazgo.get("line", "0"))
+            
+            # Usamos el tipo de error (category o type) como identificador
+            categoria_error = hallazgo.get("category", hallazgo.get("type", ""))
+            
+            # 2. Creamos una huella dactilar única para este error
+            firma_unica = f"{archivo}-{linea}-{categoria_error}"
+            
+            # 3. Si la firma es nueva, lo guardamos. Si ya existe, la IA lo repitió y lo ignoramos.
+            if firma_unica not in firmas_vistas:
+                firmas_vistas.add(firma_unica)
+                hallazgos_del_paso.append(hallazgo)
+        
+        print(f"✅ Extractor terminó: Azure mandó {len(hallazgos_crudos)}, pero filtrados quedaron {len(hallazgos_del_paso)} únicos.")
 
         return {
             "session_id": request.session_id,
@@ -461,13 +538,10 @@ def analyze_step(request: StepAnalyzeRequest):
             "hallazgos": hallazgos_del_paso,
             "omitidos": archivos_omitidos
         }
-
+        
     except Exception as e:
-        print(f"🛑 ERROR EN /analyze/step: {str(e)}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error interno durante el análisis del paso: {str(e)}"
-        )
+        print(f"🛑 Error Azure: {e}")
+        raise HTTPException(status_code=502, detail=f"Falla en IA: {e}")
         
 @app.get("/debug/workspace/{session_id}")
 def inspeccionar_ram(session_id: str, file_path: str = Query(...)):
@@ -489,12 +563,11 @@ def inspeccionar_ram(session_id: str, file_path: str = Query(...)):
 @app.get("/login")
 def github_login():
     """
-    PASO 1: Redirige al usuario a la pantalla verde de GitHub para que nos dé permiso.
+    PASO 1: Redirige al usuario a GitHub pidiendo permisos explícitos de ESCRITURA.
     """
-    # Construimos la URL de autorización
-    github_auth_url = f"https://github.com/login/oauth/authorize?client_id={GITHUB_CLIENT_ID}"
+    # 🚀 EL FIX: Agregamos '&scope=repo' al final para poder crear ramas y PRs
+    github_auth_url = f"https://github.com/login/oauth/authorize?client_id={GITHUB_CLIENT_ID}&scope=repo"
     
-    # Mandamos al navegador web del usuario directo hacia allá
     return RedirectResponse(url=github_auth_url)
 
 @app.get("/auth/callback")
@@ -533,3 +606,45 @@ def github_callback(code: str):
     # Ajusta el puerto (ej. 5173 o 3000) según donde corra tu React
     url_frontend = f"http://localhost:5173?github_token={access_token}"
     return RedirectResponse(url=url_frontend)
+
+
+def analizar_con_azure(session_id: str, url_azure: str):
+    """
+    Extrae los archivos, construye el payload y tiene RAYOS X 
+    para ver exactamente qué se envía y qué se recibe.
+    """
+    try:
+        # 1. Recuperar archivos
+        archivos_en_ram = workspace.get_all_files(session_id) 
+        
+        if not archivos_en_ram:
+            print(f"⚠️ ALERTA: La RAM está vacía para la sesión {session_id}")
+            raise ValueError("No hay archivos cargados en la sesión actual.")
+
+        # 2. Construir el payload
+        payload = {
+            "files": archivos_en_ram
+        }
+
+        # 🔬 RAYOS X - LO QUE ENVIAMOS (Limitado a 500 caracteres para no saturar)
+        print(f"\n📦 ENVIANDO A AZURE ({url_azure}):")
+        payload_str = json.dumps(payload, indent=2)
+        print(payload_str[:500] + "\n... [CÓDIGO TRUNCADO]") 
+
+        # 3. Enviar a Azure
+        respuesta = requests.post(url_azure, json=payload, timeout=60)
+        
+        # 🔬 RAYOS X - LO QUE RESPONDE AZURE
+        print(f"\n🤖 RESPUESTA CRUDA DE AZURE (Status {respuesta.status_code}):")
+        raw_response = respuesta.text
+        print(raw_response[:800] + "\n... [RESPUESTA TRUNCADA]\n")
+
+        respuesta.raise_for_status() 
+        return respuesta.json()
+
+    except requests.exceptions.RequestException as e:
+        print(f"🛑 Error de red al contactar a Azure: {str(e)}")
+        raise HTTPException(status_code=502, detail=f"Error al contactar a la IA: {str(e)}")
+    except Exception as e:
+        print(f"🛑 Error interno: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))

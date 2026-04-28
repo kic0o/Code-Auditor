@@ -1,10 +1,9 @@
-import React, { useState, useRef, useMemo } from 'react';
+import React, { useState, useRef, useMemo, useEffect } from 'react';
 import { 
   Github, FileText, Upload, Search, ChevronRight, Folder, 
   CheckCircle, AlertCircle, ArrowLeft, Zap, ShieldAlert, Info, ExternalLink, X,
   Check
 } from 'lucide-react';
-
 
 // ── CONFIGURACIÓN ──────────────────────────────────────────────────────────
 const REVIEW_UPLOAD_CONFIG = {
@@ -20,11 +19,12 @@ const ANALYSIS_CATEGORIES = [
   { id: 'software_logic', label: 'Lógica del software', shortLabel: 'Lógica',    icon: Zap       },
 ];
  
+// 🔗 URL de tu Backend para disparar el OAuth
+const GITHUB_AUTH_URL = 'http://127.0.0.1:8000/login';
+
 const createEmptyCategorySelection = () =>
   ANALYSIS_CATEGORIES.reduce((acc, c) => { acc[c.id] = new Set(); return acc; }, {});
  
-// ── WIZARD BAR EXTENDIDO (7 pasos) ────────────────────────────────────────
-// Pasos: 1-Conectar, 2-Seleccionar, 3-Analizar, 4-Negocio, 5-Seguridad, 6-Prácticas, 7-Lógica
 const WIZARD_STEPS = [
   { id: 1, label: 'Conectar',    icon: Github      },
   { id: 2, label: 'Seleccionar', icon: Folder      },
@@ -78,7 +78,6 @@ const WizardBar = ({ currentStep }) => (
   </div>
 );
  
-// ── SCORE RING ─────────────────────────────────────────────────────────────
 const ScoreRing = ({ score }) => {
   const radius = 40;
   const circumference = 2 * Math.PI * radius;
@@ -100,7 +99,6 @@ const ScoreRing = ({ score }) => {
   );
 };
  
-// ── APP ────────────────────────────────────────────────────────────────────
 const App = () => {
   const [view, setView] = useState('setup');
   const [wizardStep, setWizardStep] = useState(1);
@@ -111,22 +109,46 @@ const App = () => {
   const [loadingFiles, setLoadingFiles] = useState(false);
   const [error, setError] = useState(null);
   const [analysisResult, setAnalysisResult] = useState(null);
-  const [filterSeverity, setFilterSeverity] = useState('all');
-  const [filterType, setFilterType] = useState('all');
   const [uploadedDocs, setUploadedDocs] = useState([]);
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
   const fileInputRef = useRef(null);
-  // Nuevo estado para recordar qué llamadas a Azure ya hicimos
   const [fetchedCategories, setFetchedCategories] = useState(new Set());
   const [currentReviewIndex, setCurrentReviewIndex] = useState(0);
   const [findingDecisions, setFindingDecisions] = useState({});
   const [isSendingToBackend, setIsSendingToBackend] = useState(false);
- 
+
+  // 🔐 ESTADOS DE AUTENTICACIÓN (Joshua's logic)
+  const [showPrivateRepoAuth, setShowPrivateRepoAuth] = useState(false);
+  const [githubAuthorized, setGithubAuthorized] = useState(false);
+  const [repoAccessMessage, setRepoAccessMessage] = useState('');
+  const [userGithubToken, setUserGithubToken] = useState(null);
+
+  // 🪝 EFECTO PARA ATRAPAR EL TOKEN DE LA URL
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get('github_token');
+
+    if (token) {
+      setUserGithubToken(token);
+      setGithubAuthorized(true);
+      setShowPrivateRepoAuth(true);
+      setRepoAccessMessage('Tu cuenta de GitHub ha sido vinculada. Ahora podemos crear PRs y leer repositorios privados.');
+      setError(null);
+      // Limpiamos la URL para que no se vea el token
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+  }, []);
+
   const getFindingId = (finding, index) => `${finding.file_path}-${finding.type}-${index}`;
  
-  // ── MEMOS ──────────────────────────────────────────────────────────────
-  
-  // 1. Contadores de la Matriz (Para que el Paso 2 no falle)
+  // Helper para saber si necesitamos pedir login
+  const shouldShowPrivateRepoAuth = (statusCode, payload) => {
+    const detail = typeof payload === 'string' ? payload : payload?.detail || payload?.message || '';
+    const normalized = detail.toLowerCase();
+    if (statusCode === 401 || statusCode === 403) return true;
+    return normalized.includes('privado') || normalized.includes('private') || normalized.includes('token');
+  };
+
   const selectedFilesCount = useMemo(() => {
     const u = new Set();
     ANALYSIS_CATEGORIES.forEach(c => selectedFileMatrix[c.id].forEach(p => u.add(p)));
@@ -141,11 +163,8 @@ const App = () => {
     ANALYSIS_CATEGORIES.reduce((acc, c) => { acc[c.id] = selectedFileMatrix[c.id].size; return acc; }, {}),
   [selectedFileMatrix]);
 
-  // 2. Resultados Secuenciales y Aplanados
   const allFindings = useMemo(() => {
     const raw = analysisResult?.findings || [];
-    
-    // Normalización total: No importa qué mande Jorge, el front lo estandariza
     return raw.map(f => ({
       ...f,
       file_path: f.file_path || f.file || f.archivo || "Global/Multiple",
@@ -153,19 +172,14 @@ const App = () => {
       recommendation: f.recommendation || f.sugerencia || "Sugerencia no proporcionada.",
       original_code: f.original_code || f.codigo_original || "",
       secure_code: f.secure_code || f.codigo_corregido || "",
-      type: f.type || 'business_rules', // Forzamos un tipo base si no viene
-      severity: 'critical' // Forzamos severidad única para evitar errores de lógica
+      type: f.type || 'business_rules',
+      severity: 'critical'
     }));
   }, [analysisResult]);
-  const uniqueTypes = useMemo(() => {
-    if (allFindings.length === 0) return ['all'];
-    return ['all', ...new Set(allFindings.map(f => f.type))];
-  }, [allFindings]);
 
   const findingsByCategory = useMemo(() => {
     const empty = ANALYSIS_CATEGORIES.reduce((acc, c) => { acc[c.id] = []; return acc; }, {});
     if (allFindings.length === 0) return empty;
-    
     return allFindings.reduce((acc, f) => {
       if (acc[f.type]) acc[f.type].push(f);
       return acc;
@@ -186,7 +200,6 @@ const App = () => {
     return { affectedFiles, affectedPct: Math.round((affectedFiles / totalFiles) * 100) };
   }, [allFindings, analysisResult]);
 
-  // 3. Variables de la vista activa (Para que ResultsView no dé pantalla blanca)
   const currentReviewCategory = ANALYSIS_CATEGORIES[currentReviewIndex];
 
   const currentCategoryFindings = useMemo(() => {
@@ -194,33 +207,20 @@ const App = () => {
     return findingsByCategory[currentReviewCategory.id] || [];
   }, [currentReviewCategory, findingsByCategory]);
 
-  // ── LOGICA DE ESTADO CORREGIDA ──────────────────────────────────────────
-
   const isCategoryCompleted = (categoryId) => {
-    // 1. Si el usuario no seleccionó archivos para esta categoría, cuenta como "lista" (vacía)
     if (selectedFileMatrix[categoryId].size === 0) return true;
-
-    // 2. IMPORTANTE: Si seleccionó archivos pero aún no hemos llamado a la API, NO está completada
     if (!fetchedCategories.has(categoryId)) return false;
-
     const findings = findingsByCategory[categoryId] || [];
-    
-    // 3. Si ya llamamos a la API y devolvió 0 errores, está completada (limpia)
     if (findings.length === 0) return true;
-
-    // 4. Si hay errores, solo está completada si el usuario ya tomó una decisión en TODOS
     return findings.every((f, i) => findingDecisions[getFindingId(f, i)] !== undefined);
   };
 
-  // El reporte final solo se muestra si todas las categorías SELECCIONADAS fueron procesadas
   const reviewCompleted = useMemo(() => {
     const selectedCategories = ANALYSIS_CATEGORIES.filter(c => selectedFileMatrix[c.id].size > 0);
     if (selectedCategories.length === 0) return false;
-    
     return selectedCategories.every(c => isCategoryCompleted(c.id));
   }, [findingDecisions, findingsByCategory, fetchedCategories, selectedFileMatrix]);
   
-  // ── HANDLERS ───────────────────────────────────────────────────────────
   const handleConnect = async () => {
     if (!repoUrl) { alert("⚠️ Por favor, ingresa una URL de GitHub primero."); return; }
     setLoadingFiles(true); setError(null);
@@ -230,140 +230,118 @@ const App = () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ repo_url: repoUrl, selected_files: [] }),
       });
-      if (!response.ok) throw new Error(`Error ${response.status}`);
+
+      if (!response.ok) {
+        let errorPayload = await response.json().catch(() => response.text());
+        if (shouldShowPrivateRepoAuth(response.status, errorPayload)) {
+          setShowPrivateRepoAuth(true);
+          setRepoAccessMessage('Este repositorio parece privado o requiere permisos. Autoriza con GitHub para continuar.');
+          return;
+        }
+        throw new Error(`Error ${response.status}`);
+      }
+
       const data = await response.json();
       const lista = data.files || data.archivos || [];
-      
-      // 🛡️ MAPEO A PRUEBA DE BALAS
       const mapeados = lista.map(a => {
-        // 1. Aseguramos extraer la ruta (path) sea un string o un objeto
         const filePath = typeof a === 'string' ? a : a.path;
-        
-        // 2. Extraemos la extensión de forma matemática partiendo el string
         const parts = filePath.split('.');
-        
-        // 3. Si tiene extensión (ej. main.py) la usamos. Si es un archivo sin 
-        // extensión (ej. un 'Dockerfile' o 'LICENSE'), le asignamos '.txt' por defecto
         const extensionSegura = parts.length > 1 ? `.${parts.pop()}` : '.txt';
-        
-        return { 
-          path: filePath, 
-          extension: extensionSegura 
-        };
+        return { path: filePath, extension: extensionSegura };
       });
-
       setRepoFiles(mapeados);
       setSelectedFileMatrix(createEmptyCategorySelection());
+      setShowPrivateRepoAuth(false);
       setWizardStep(2);
-
     } catch (err) {
-      setError("No se pudo conectar con el backend. Verifica que la URL sea válida.");
+      setError("No se pudo conectar con el backend o el repositorio no existe.");
     } finally {
       setLoadingFiles(false);
     }
   };
  
-  // 1. EL MOTOR INDIVIDUAL: Solo le pide a Azure los datos de la pestaña actual
-  // 1. EL MOTOR INDIVIDUAL (CON RAYOS X ☢️)
   const fetchCategoryData = async (index) => {
     const category = ANALYSIS_CATEGORIES[index];
     const filesForThisCat = Array.from(selectedFileMatrix[category.id]);
-
     setView('analyzing');
     setCurrentlyAnalyzingCategory(category.label);
-
-    console.log(`🚀 [PASO 1] Solicitando análisis para: ${category.label}`);
-    console.log(`📄 Archivos enviados en el Súper JSON:`, filesForThisCat);
-
     try {
-      const response = await fetch("http://127.0.0.1:8000/analyze", {
+      const response = await fetch("http://127.0.0.1:8000/analyze/step", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          repo_url: repoUrl,
-          selected_files: filesForThisCat,
-          selected_files_by_category: { [category.id]: filesForThisCat }
+          session_id: analysisResult?.session_id || "sesion-" + Date.now(),
+          file_paths: filesForThisCat,
+          categoria: category.id,
+          repo_url: repoUrl
         }),
       });
-
       if (response.ok) {
         const data = await response.json();
-        console.log(`📦 [PASO 2] Respuesta exitosa del Backend para ${category.label}:`, data);
-
-        let catFindings = [];
-        if (Array.isArray(data.findings)) catFindings = data.findings;
-        else if (Array.isArray(data.ai_responses)) {
-          catFindings = data.ai_responses.flatMap(r => r.findings || r.issues || []);
-        }
-
-        console.log(`🎯 [PASO 3] Vulnerabilidades crudas encontradas por Jorge:`, catFindings);
-
+        let catFindings = data.hallazgos || [];
+        
+        // 🧠 ATRAPADOR UNIVERSAL DE LLAVES (Corregido: Name Clash)
         const normalized = catFindings.map(f => ({
           ...f,
-          file_path: f.file_path || f.file || f.archivo || "Global/Multiple",
-          description: f.description || f.sugerencia || f.explanation || "Revisar código.",
+          file_path: f.file || f.file_path || f.archivo || "Global/Multiple",
+          
+          // Mapeo de textos
+          title: f.title || f.name || "Hallazgo de " + category.label,
+          description: f.explanation || f.description || "Revisar código.",
           recommendation: f.recommendation || f.sugerencia || "Sugerencia no proporcionada.",
+          
+          // Mapeo de código
           original_code: f.original_code || f.codigo_original || "",
-          secure_code: f.secure_code || f.codigo_corregido || "",
+          secure_code: f.corrected_code || f.optimized_code || f.secure_code || "",
+          
+          // 🔥 EL BUG ESTABA AQUÍ: Obligamos a que el 'type' sea el ID de la pestaña actual
+          // para que React sepa dónde dibujarlo (ej. 'best_practices' o 'software_logic').
           type: category.id,
-          severity: 'critical'
+          
+          // Rescatamos la categoría específica de Jorge para mostrarla visualmente después
+          sub_categoria: f.category || "General",
+          
+          severity: f.severity || 'warning',
+          line: f.line || null
         }));
-
+        
         setAnalysisResult(prev => ({
-          session_id: data.session_id || prev?.session_id || "sesion-" + Date.now(),
+          session_id: data.session_id,
           total_files: (prev?.total_files || 0) + filesForThisCat.length,
           findings: [...(prev?.findings || []), ...normalized]
         }));
       } else {
-        // 🔥 SI EL BACKEND EXPLOTA, AHORA NOS AVISARÁ
-        const errorText = await response.text();
-        console.error(`🛑 [ERROR HTTP] El backend falló con código ${response.status}:`, errorText);
-        alert(`🚨 Error del backend en ${category.label}:\nRevisa la consola (F12) o la terminal de Python para ver el error exacto.`);
+        alert(`🚨 Error del backend en ${category.label}`);
       }
     } catch (err) {
-      console.error(`🛑 [ERROR DE RED] No se pudo conectar con el servidor:`, err);
-      alert(`🚨 Falló la conexión con el servidor en ${category.label}. ¿Está prendido Uvicorn?`);
+      alert(`🚨 Falló la conexión con el servidor en ${category.label}.`);
     }
-
     setFetchedCategories(prev => new Set(prev).add(category.id));
     setView('results');
   };
 
-  // 2. EL BOTÓN INICIAR: Busca la primera categoría que el usuario quiso analizar
   const startAnalysis = async () => {
     const firstIndex = ANALYSIS_CATEGORIES.findIndex(c => selectedFileMatrix[c.id].size > 0);
-    if (firstIndex === -1) return; // Si no seleccionó nada, no hace nada
-
-    // Limpiamos la mesa para un análisis nuevo
+    if (firstIndex === -1) return;
     setAnalysisResult({ session_id: null, total_files: 0, findings: [] });
     setFetchedCategories(new Set());
     setFindingDecisions({});
     setCurrentReviewIndex(firstIndex);
     setWizardStep(4);
-
-    // Llamamos a Azure SOLO para esa primera categoría
     await fetchCategoryData(firstIndex);
   };
 
-  // 3. EL BOTÓN SIGUIENTE: Brinca categorías vacías y llama a Azure justo a tiempo
   const advanceToNextCategory = async () => {
     let nextIndex = currentReviewIndex + 1;
-
-    // MAGIA: Saltamos automáticamente las categorías donde el usuario NO metió archivos
     while (nextIndex < ANALYSIS_CATEGORIES.length && selectedFileMatrix[ANALYSIS_CATEGORIES[nextIndex].id].size === 0) {
       nextIndex++;
     }
-
     if (nextIndex < ANALYSIS_CATEGORIES.length) {
       setCurrentReviewIndex(nextIndex);
       const nextCatId = ANALYSIS_CATEGORIES[nextIndex].id;
-
-      // Si es la primera vez que entramos a esta categoría, llamamos a Azure
       if (!fetchedCategories.has(nextCatId)) {
         await fetchCategoryData(nextIndex);
       }
-    } else {
-      // Ya no hay más categorías, React mostrará la pantalla de "Auditoría Completada"
     }
   };
  
@@ -372,9 +350,9 @@ const App = () => {
     setSelectedFileMatrix(createEmptyCategorySelection()); setRepoUrl('');
     setAnalysisResult(null); setUploadedDocs([]);
     setCurrentReviewIndex(0); setFindingDecisions({});
+    setFetchedCategories(new Set());
   };
  
-  // Navegar a categoría desde el sidebar
   const goToCategory = (index) => {
     setCurrentReviewIndex(index);
     setWizardStep(4 + index);
@@ -423,6 +401,7 @@ const App = () => {
     setFindingDecisions(prev => ({ ...prev, [findingId]: prev[findingId] === decision ? undefined : decision }));
   };
  
+  // 🚀 LA MAGIA FINAL: Conectando OAuth con Backend
   const enviarDecisionesAlBackend = async () => {
     const aceptados = [];
     ANALYSIS_CATEGORIES.forEach(cat => {
@@ -430,16 +409,37 @@ const App = () => {
         if (findingDecisions[getFindingId(f, i)] === 'accepted') aceptados.push(f);
       });
     });
-    if (aceptados.length === 0) { alert("No aceptaste ningún cambio."); return; }
+
+    if (aceptados.length === 0) { 
+      alert("No aceptaste ningún cambio."); 
+      return; 
+    }
+
+    // Validación estricta: No podemos subir a GitHub sin llave
+    if (!userGithubToken) {
+      alert("⚠️ Necesitas iniciar sesión con GitHub para poder crear el Pull Request.");
+      setShowPrivateRepoAuth(true); // Redirigimos a la pantalla de Auth
+      return;
+    }
+
+    // Extraemos "Usuario/Repo" (Ej: Israel/Auditor) para la API
+    let repoPath = repoUrl.replace('https://github.com/', '').replace('.git', '');
+    if (repoPath.endsWith('/')) repoPath = repoPath.slice(0, -1);
+
     setIsSendingToBackend(true);
     try {
       const response = await fetch("http://127.0.0.1:8000/apply-patches", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ session_id: analysisResult.session_id || "sesion-actual", approved_findings: aceptados }),
+        body: JSON.stringify({ 
+          session_id: analysisResult.session_id || "sesion-actual", 
+          approved_findings: aceptados,
+          repo_name: repoPath,            // Nuevo campo
+          github_token: userGithubToken   // Nuevo campo
+        }),
       });
       if (!response.ok) throw new Error("Error aplicando parches");
-      alert("¡Éxito! Los parches se aplicaron correctamente.");
+      alert("¡Éxito! Los parches se aplicaron y el PR está en camino.");
       handleReset();
     } catch {
       alert("Error al enviar los cambios aceptados al backend.");
@@ -448,7 +448,6 @@ const App = () => {
     }
   };
  
-  // ── COMPONENTES ────────────────────────────────────────────────────────
   const Header = () => (
     <nav className="bg-[#0f172a] px-8 py-3 flex justify-between items-center sticky top-0 z-20 shadow-lg">
       <div className="flex items-center gap-3">
@@ -459,10 +458,12 @@ const App = () => {
         </div>
       </div>
       <div className="flex items-center gap-4">
-        <div className="flex items-center gap-2 px-4 py-1.5 bg-blue-900/30 border border-blue-500/30 rounded-full">
-          <div className="w-2 h-2 bg-blue-400 rounded-full animate-pulse shadow-[0_0_8px_rgba(96,165,250,0.8)]"></div>
-          <span className="text-[15px] font-bold text-blue-300 tracking-wide">Gemini 1.5 Flash · Conectado</span>
-        </div>
+        {userGithubToken && (
+          <div className="flex items-center gap-2 px-3 py-1 bg-green-500/20 border border-green-500/50 rounded-full">
+            <CheckCircle size={14} className="text-green-400" />
+            <span className="text-[13px] font-bold text-green-300">Autenticado</span>
+          </div>
+        )}
         <div className="w-9 h-9 bg-slate-800 rounded-lg flex items-center justify-center text-slate-300 font-bold text-base border border-slate-700">ES</div>
       </div>
     </nav>
@@ -480,13 +481,17 @@ const App = () => {
     </footer>
   );
  
-  // PASO 1
   const Step1View = () => (
     <div className="flex justify-center items-center flex-1">
       <div className="w-full max-w-md animate-in fade-in slide-in-from-bottom-4 duration-500">
         <div className="text-center mb-8">
-          <div className="w-14 h-14 bg-[#0f172a] rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-xl shadow-slate-200">
+          <div className="w-14 h-14 bg-[#0f172a] rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-xl shadow-slate-200 relative">
             <Github className="text-white" size={28} />
+            {userGithubToken && (
+              <div className="absolute -bottom-1 -right-1 bg-green-500 rounded-full p-1 border-2 border-white">
+                <CheckCircle size={12} className="text-white" />
+              </div>
+            )}
           </div>
           <h2 className="text-5xl font-black text-slate-800 tracking-tight">Conecta tu repositorio</h2>
           <p className="text-slate-400 text-lg mt-1">Ingresa la URL de GitHub para comenzar</p>
@@ -504,10 +509,122 @@ const App = () => {
               </div>
             </div>
             {error && <p className="text-base text-red-500 font-bold px-3 py-2 bg-red-50 rounded-xl border border-red-100">{error}</p>}
+            
             <button onClick={handleConnect} disabled={loadingFiles || !repoUrl}
-              className={`w-full py-3.5 text-white text-lg font-bold rounded-xl transition-all flex justify-center items-center gap-2 shadow-md ${loadingFiles || !repoUrl ? 'bg-slate-300 cursor-not-allowed shadow-none' : 'bg-[#0f172a] hover:bg-slate-800 shadow-slate-200 active:scale-95'}`}>
+              className={`w-full py-3.5 text-white text-lg font-bold rounded-xl transition-all flex justify-center items-center gap-2 shadow-md ${loadingFiles || !repoUrl ? 'bg-slate-300 cursor-not-allowed shadow-none' : 'bg-blue-600 hover:bg-blue-700 shadow-blue-200 active:scale-95'}`}>
               {loadingFiles ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> : <ExternalLink size={15} />}
-              {loadingFiles ? 'Conectando...' : 'Conectar Repositorio'}
+              {loadingFiles ? 'Conectando...' : 'Analizar Repositorio'}
+            </button>
+            
+            <div className="pt-2 border-t border-slate-100 mt-4">
+              {!userGithubToken ? (
+                <button
+                  type="button"
+                  onClick={() => setShowPrivateRepoAuth(true)}
+                  className="w-full text-sm font-bold text-slate-500 hover:text-slate-800 flex items-center justify-center gap-2 transition-colors"
+                >
+                  <ShieldAlert size={14} /> Iniciar Sesión o Repo Privado
+                </button>
+              ) : (
+                <p className="w-full text-sm font-bold text-green-600 text-center flex items-center justify-center gap-2">
+                  <CheckCircle size={14} /> Conectado con GitHub
+                </p>
+              )}
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  );
+
+  // VISTA DE LOGIN (Joshua's View)
+  const PrivateRepoAuthView = () => (
+    <div className="flex justify-center items-center flex-1">
+      <div className="w-full max-w-xl animate-in fade-in slide-in-from-bottom-4 duration-500">
+        <div className="text-center mb-10">
+          <div className="w-16 h-16 bg-[#0f172a] rounded-[1.35rem] flex items-center justify-center mx-auto mb-5 shadow-xl shadow-slate-200">
+            <Github className="text-white" size={30} />
+          </div>
+          <h2 className="text-5xl font-black text-slate-800 tracking-tight">Autorización</h2>
+          <p className="text-slate-400 text-xl mt-2">Vincula tu cuenta para aplicar correcciones automáticas</p>
+        </div>
+
+        <section className="bg-white p-8 rounded-[2rem] shadow-sm border border-slate-200">
+          <div className={`rounded-2xl border px-5 py-4 mb-5 ${
+            githubAuthorized ? 'border-green-200 bg-green-50' : 'border-amber-200 bg-amber-50'
+          }`}>
+            <div className="flex items-start gap-3">
+              <div className={`mt-0.5 w-9 h-9 rounded-xl flex items-center justify-center ${
+                githubAuthorized ? 'bg-green-100 text-green-600' : 'bg-amber-100 text-amber-600'
+              }`}>
+                {githubAuthorized ? <CheckCircle size={18} /> : <ShieldAlert size={18} />}
+              </div>
+              <div>
+                <p className={`text-[15px] font-black uppercase tracking-wider ${
+                  githubAuthorized ? 'text-green-700' : 'text-amber-700'
+                }`}>
+                  {githubAuthorized ? 'Acceso vinculado' : 'Permisos requeridos'}
+                </p>
+                <p className={`text-base font-medium mt-1 leading-relaxed ${
+                  githubAuthorized ? 'text-green-900' : 'text-amber-900'
+                }`}>
+                  {repoAccessMessage || 'Inicia sesión para permitir que la IA pueda crear Pull Requests en tu nombre.'}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <a
+            href={GITHUB_AUTH_URL}
+            className={`w-full py-4 text-white text-xl font-bold rounded-2xl transition-all flex justify-center items-center gap-3 shadow-md ${
+              githubAuthorized ? 'bg-green-600 hover:bg-green-700 shadow-green-200' : 'bg-[#24292e] hover:bg-black shadow-slate-200'
+            }`}
+          >
+            <Github size={20} />
+            {githubAuthorized ? 'Volver a autorizar con GitHub' : 'Autorizar con GitHub'}
+          </a>
+
+          <div className="my-7 flex items-center gap-4">
+            <div className="h-px flex-1 bg-slate-200" />
+            <span className="text-[14px] font-black text-slate-300 uppercase tracking-[0.25em]">Siguiente paso</span>
+            <div className="h-px flex-1 bg-slate-200" />
+          </div>
+
+          <div className="space-y-4">
+            <div>
+              <label className="text-[14px] font-black text-slate-400 uppercase tracking-widest mb-2 block">URL DEL REPOSITORIO</label>
+              <div className="relative">
+                <input
+                  type="text"
+                  value={repoUrl}
+                  onChange={e => setRepoUrl(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && handleConnect()}
+                  placeholder="https://github.com/usuario/repo"
+                  className="w-full pl-10 pr-4 py-3.5 bg-slate-50 border border-slate-200 rounded-2xl text-lg font-medium focus:ring-2 focus:ring-blue-500/20 outline-none transition-all"
+                />
+                <Search className="absolute left-3.5 top-4 text-slate-400" size={16} />
+              </div>
+            </div>
+            {error && <p className="text-base text-red-500 font-bold px-3 py-2 bg-red-50 rounded-xl border border-red-100">{error}</p>}
+
+            <button
+              onClick={handleConnect}
+              disabled={loadingFiles || !repoUrl}
+              className={`w-full py-4 rounded-2xl font-bold text-xl flex justify-center items-center gap-3 transition-all ${
+                loadingFiles || !repoUrl
+                  ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                  : 'bg-slate-200 text-slate-700 hover:bg-slate-300'
+              }`}
+            >
+              {loadingFiles ? <div className="w-5 h-5 border-2 border-slate-500 border-t-transparent rounded-full animate-spin" /> : <ExternalLink size={18} />}
+              {loadingFiles ? 'Verificando acceso...' : 'Continuar con el repositorio'}
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowPrivateRepoAuth(false)}
+              className="w-full text-base font-bold text-slate-400 hover:text-slate-700 transition-colors"
+            >
+              Volver al formulario normal
             </button>
           </div>
         </section>
@@ -515,7 +632,6 @@ const App = () => {
     </div>
   );
  
-  // PASO 2
   const Step2View = () => (
     <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 max-w-[1400px] mx-auto w-full animate-in fade-in slide-in-from-bottom-4 duration-500">
       <div className="lg:col-span-4 space-y-6">
@@ -663,7 +779,6 @@ const App = () => {
     </div>
   );
  
-  // ── RESULTADOS MEJORADOS ───────────────────────────────────────────────
   const ResultsView = () => {
     if (!analysisResult) return null;
     const activeCategory = currentReviewCategory || ANALYSIS_CATEGORIES[0];
@@ -672,8 +787,6 @@ const App = () => {
  
     return (
       <div className="max-w-7xl mx-auto w-full space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-700">
- 
-        {/* ── ENCABEZADO CON MÉTRICAS ── */}
         <div className="bg-white rounded-3xl shadow-sm border border-slate-100 overflow-hidden">
           <div className="bg-[#0f172a] px-8 py-4 flex items-center justify-between">
             <div>
@@ -686,8 +799,6 @@ const App = () => {
               <span>{ANALYSIS_CATEGORIES.length} aspectos revisados</span>
             </div>
           </div>
- 
-          {/* Barra de 5 métricas */}
           <div className="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-slate-100 border-t border-slate-100">
             <div className="flex flex-col items-center justify-center py-6 px-4">
               <ScoreRing score={analysisResult.total_score || 100} />
@@ -705,8 +816,6 @@ const App = () => {
         </div>
  
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
- 
-          {/* ── SIDEBAR MEJORADO ── */}
           <aside className="lg:col-span-4">
             <div className="bg-transparent space-y-3 sticky top-24">
               <h3 className="text-[15px] font-black text-slate-400 uppercase tracking-[0.2em] px-1 mb-4">Submenú de Revisión</h3>
@@ -715,7 +824,6 @@ const App = () => {
                 const isDone   = isCategoryCompleted(category.id);
                 const stats    = categoryStats[category.id];
                 const Icon     = category.icon;
- 
                 return (
                   <button key={category.id} type="button" onClick={() => goToCategory(index)}
                     className={`w-full text-left rounded-[1.5rem] border p-5 transition-all ${
@@ -741,8 +849,6 @@ const App = () => {
                         <span className="text-[13px] font-black uppercase px-2 py-1 rounded-lg bg-blue-100 text-blue-600 flex-shrink-0">Actual</span>
                       ) : null}
                     </div>
- 
-                    {/* Chips de severidad */}
                     <div className="pl-[42px]">
                       {stats.total > 0 ? (
                         <span className="text-[14px] font-bold text-slate-500">{stats.total} problemas detectados</span>
@@ -756,21 +862,14 @@ const App = () => {
             </div>
           </aside>
  
-          {/* ── SECCIÓN PRINCIPAL ── */}
           <section className="lg:col-span-8 space-y-5">
             <div className="bg-white rounded-3xl border border-slate-100 p-6 space-y-5">
- 
               {!reviewCompleted ? (
                 <>
-                  {/* Header de categoría activa con sus conteos */}
                   <div className="border-b border-slate-100 pb-5 mb-5 flex flex-col md:flex-row md:justify-between md:items-end gap-4">
                     <div>
-                      <p className="text-[14px] font-black uppercase tracking-[0.2em] text-blue-500 mb-1">
-                        Revisión en progreso
-                      </p>
-                      <h3 className="text-4xl font-black text-slate-900 tracking-tight">
-                        {activeCategory.label}
-                      </h3>
+                      <p className="text-[14px] font-black uppercase tracking-[0.2em] text-blue-500 mb-1">Revisión en progreso</p>
+                      <h3 className="text-4xl font-black text-slate-900 tracking-tight">{activeCategory.label}</h3>
                     </div>
                     <div className="text-left md:text-right bg-slate-50 border border-slate-100 px-4 py-2 rounded-xl">
                       <span className="text-[15px] font-bold text-slate-500 uppercase tracking-widest">
@@ -778,8 +877,7 @@ const App = () => {
                       </span>
                     </div>
                   </div>
- 
-                  {/* ── TARJETAS DE HALLAZGOS MEJORADAS ── */}
+
                   {currentCategoryFindings.length > 0 ? (
                     <div className="space-y-4">
                       {currentCategoryFindings.map((finding, index) => {
@@ -787,17 +885,15 @@ const App = () => {
                         const decision = findingDecisions[findingId];
                         const isC = finding.severity === 'critical';
                         const isW = finding.severity === 'warning';
- 
                         return (
                           <div key={findingId} className={`rounded-2xl border overflow-hidden shadow-sm transition-all ${
                             decision === 'accepted' ? 'border-green-300 shadow-green-50' :
-                            decision === 'rejected' ? 'border-red-300 shadow-red-50'   :
+                            decision === 'rejected' ? 'border-red-300 shadow-red-50' :
                             isC ? 'border-red-200' : isW ? 'border-amber-200' : 'border-blue-200'
                           }`}>
-                            {/* Banda de severidad */}
                             <div className={`px-5 py-2 flex items-center justify-between ${
                               decision === 'accepted' ? 'bg-green-50' :
-                              decision === 'rejected' ? 'bg-red-50'   :
+                              decision === 'rejected' ? 'bg-red-50' :
                               isC ? 'bg-red-50' : isW ? 'bg-amber-50' : 'bg-blue-50'
                             }`}>
                               <div className="flex items-center gap-2">
@@ -817,8 +913,6 @@ const App = () => {
                                 <span className={`text-[14px] font-bold px-2 py-0.5 rounded-lg ${isC ? 'bg-red-100 text-red-700' : isW ? 'bg-amber-100 text-amber-700' : 'bg-blue-100 text-blue-700'}`}>{finding.type}</span>
                               </div>
                             </div>
- 
-                            {/* Cuerpo */}
                             <div className="bg-white p-5 space-y-3">
                               <h4 className="text-lg font-bold text-slate-800 leading-snug">{finding.title}</h4>
                               <p className="text-lg text-slate-500 leading-relaxed">{finding.description}</p>
@@ -829,7 +923,6 @@ const App = () => {
                                   <span className="text-lg text-slate-600">{finding.recommendation}</span>
                                 </div>
                               </div>
- 
                               {(finding.original_code || finding.secure_code) && (
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
                                   <div className="space-y-1">
@@ -850,8 +943,6 @@ const App = () => {
                                   </div>
                                 </div>
                               )}
- 
-                              {/* Botones por hallazgo */}
                               <div className="flex gap-3 pt-3 border-t border-slate-100">
                                 <button onClick={() => toggleFindingDecision(findingId, 'rejected')}
                                   className={`flex-1 py-2.5 rounded-xl font-bold text-base flex justify-center items-center gap-2 transition-all ${
@@ -876,8 +967,7 @@ const App = () => {
                       <p className="text-slate-400 font-medium italic">No hay hallazgos para este aspecto. Puedes avanzar.</p>
                     </div>
                   )}
- 
-                  {/* Botón siguiente categoría */}
+
                   <div className="flex justify-between items-center border-t border-slate-100 pt-5">
                     <button onClick={handleReset} className="flex items-center gap-2 text-slate-400 font-bold hover:text-blue-600 transition-colors text-lg">
                       <ArrowLeft size={16} /> Nuevo análisis
@@ -900,7 +990,6 @@ const App = () => {
                   </div>
                 </>
               ) : (
-                /* ── RESUMEN FINAL MEJORADO ── */
                 <div className="space-y-6">
                   <div className="text-center pb-4 border-b border-slate-100">
                     <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
@@ -909,8 +998,7 @@ const App = () => {
                     <h3 className="text-5xl font-black text-slate-900 tracking-tight">Revisión Finalizada</h3>
                     <p className="text-slate-500 mt-1 text-lg">Has evaluado todos los hallazgos propuestos por la IA.</p>
                   </div>
- 
-                  {/* Tarjetas por categoría */}
+
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                     {ANALYSIS_CATEGORIES.map(category => {
                       const stats = categoryStats[category.id];
@@ -918,37 +1006,68 @@ const App = () => {
                       const accepted = findings.filter((f, i) => findingDecisions[getFindingId(f, i)] === 'accepted').length;
                       const rejected = findings.filter((f, i) => findingDecisions[getFindingId(f, i)] === 'rejected').length;
                       const Icon = category.icon;
- 
+                      const wasAnalyzed = selectedFileMatrix[category.id].size > 0;
+
                       return (
-                        <div key={category.id} className="rounded-2xl border border-slate-200 bg-white p-4">
+                        <div key={category.id} className={`rounded-2xl border p-4 transition-all ${
+                          wasAnalyzed ? 'border-slate-200 bg-white' : 'border-slate-200 bg-slate-50/60'
+                        }`}>
                           <div className="flex items-center gap-2 mb-3">
-                            <div className="w-7 h-7 rounded-lg bg-slate-100 flex items-center justify-center">
-                              <Icon size={13} className="text-slate-500" />
+                            <div className={`w-7 h-7 rounded-lg flex items-center justify-center ${
+                              wasAnalyzed ? 'bg-slate-100' : 'bg-slate-200'
+                            }`}>
+                              <Icon size={13} className={wasAnalyzed ? 'text-slate-500' : 'text-slate-400'} />
                             </div>
-                            <p className="text-lg font-bold text-slate-800">{category.label}</p>
+                            <p className={`text-lg font-bold ${wasAnalyzed ? 'text-slate-800' : 'text-slate-400'}`}>
+                              {category.label}
+                            </p>
+                            {!wasAnalyzed && (
+                              <span className="ml-auto text-[11px] font-black uppercase px-2 py-0.5 rounded-lg bg-slate-200 text-slate-500 tracking-wide flex-shrink-0">
+                                No analizado
+                              </span>
+                            )}
                           </div>
-                          <div className="flex gap-3 mb-3">
-                            {stats.critical > 0 && <span className="text-[14px] font-bold text-red-600 bg-red-50 px-2 py-0.5 rounded-lg">{stats.critical} críticos</span>}
-                            {stats.warning  > 0 && <span className="text-[14px] font-bold text-amber-600 bg-amber-50 px-2 py-0.5 rounded-lg">{stats.warning} alertas</span>}
-                            {stats.info     > 0 && <span className="text-[14px] font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded-lg">{stats.info} info</span>}
-                            {stats.total === 0  && <span className="text-[14px] font-bold text-slate-400">Sin hallazgos</span>}
-                          </div>
-                          <div className="flex gap-3">
-                            <div className="flex-1 text-center bg-green-50 rounded-xl py-2 border border-green-100">
-                              <span className="text-4xl font-black text-green-600">{accepted}</span>
-                              <p className="text-[13px] font-bold text-green-500 uppercase">Aceptados</p>
-                            </div>
-                            <div className="flex-1 text-center bg-red-50 rounded-xl py-2 border border-red-100">
-                              <span className="text-4xl font-black text-red-500">{rejected}</span>
-                              <p className="text-[13px] font-bold text-red-400 uppercase">Rechazados</p>
-                            </div>
-                          </div>
+
+                          {wasAnalyzed ? (
+                            <>
+                              <div className="flex gap-3 mb-3">
+                                {stats.total > 0
+                                  ? <span className="text-[14px] font-bold text-slate-500">{stats.total} problemas detectados</span>
+                                  : <span className="text-[14px] font-bold text-green-500">Sin hallazgos ✓</span>}
+                              </div>
+                              <div className="flex gap-3">
+                                <div className="flex-1 text-center bg-green-50 rounded-xl py-2 border border-green-100">
+                                  <span className="text-4xl font-black text-green-600">{accepted}</span>
+                                  <p className="text-[13px] font-bold text-green-500 uppercase">Aceptados</p>
+                                </div>
+                                <div className="flex-1 text-center bg-red-50 rounded-xl py-2 border border-red-100">
+                                  <span className="text-4xl font-black text-red-500">{rejected}</span>
+                                  <p className="text-[13px] font-bold text-red-400 uppercase">Rechazados</p>
+                                </div>
+                              </div>
+                            </>
+                          ) : (
+                            <>
+                              <div className="flex gap-3 mb-3">
+                                <span className="text-[14px] font-bold text-slate-400">No se asignaron archivos</span>
+                              </div>
+                              <div className="flex gap-3">
+                                <div className="flex-1 text-center bg-slate-100 rounded-xl py-2 border border-slate-200">
+                                  <span className="text-4xl font-black text-slate-400">—</span>
+                                  <p className="text-[13px] font-bold text-slate-400 uppercase">Aceptados</p>
+                                </div>
+                                <div className="flex-1 text-center bg-slate-100 rounded-xl py-2 border border-slate-200">
+                                  <span className="text-4xl font-black text-slate-400">—</span>
+                                  <p className="text-[13px] font-bold text-slate-400 uppercase">Rechazados</p>
+                                </div>
+                              </div>
+                            </>
+                          )}
                         </div>
                       );
                     })}
                   </div>
- 
-                  {/* Totales globales */}
+
                   <div className="grid grid-cols-3 gap-3 bg-slate-50 rounded-2xl border border-slate-200 p-4">
                     <div className="text-center">
                       <span className="text-5xl font-black text-green-600">
@@ -967,16 +1086,16 @@ const App = () => {
                       <p className="text-[14px] font-bold text-slate-400 uppercase mt-0.5">Total Hallazgos</p>
                     </div>
                   </div>
- 
+
                   <div className="bg-slate-50 rounded-2xl p-6 border border-slate-200 text-center">
-                    <p className="text-lg font-bold text-slate-600 mb-5">Estás a punto de inyectar las correcciones aceptadas a tu entorno virtual.</p>
+                    <p className="text-lg font-bold text-slate-600 mb-5">Estás a punto de inyectar las correcciones aceptadas a tu entorno virtual y crear el Pull Request.</p>
                     <button onClick={enviarDecisionesAlBackend} disabled={isSendingToBackend}
                       className="w-full md:w-auto px-10 py-4 rounded-2xl font-black text-lg flex items-center justify-center mx-auto gap-3 text-white bg-[#0f172a] hover:bg-slate-800 shadow-xl shadow-slate-300 transition-all active:scale-95">
                       {isSendingToBackend ? <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" /> : <Zap size={18} />}
-                      {isSendingToBackend ? 'Aplicando Parches...' : 'Aplicar Cambios'}
+                      {isSendingToBackend ? 'Creando Pull Request...' : 'Aplicar Cambios'}
                     </button>
                   </div>
- 
+
                   <button onClick={handleReset} className="block text-center w-full text-base font-bold text-slate-400 hover:text-blue-600 transition-colors">
                     Empezar un nuevo análisis
                   </button>
@@ -994,7 +1113,8 @@ const App = () => {
       {Header()}
       <WizardBar currentStep={wizardStep} />
       <main className="flex-1 px-8 py-10 flex flex-col">
-        {view === 'setup' && wizardStep === 1 && Step1View()}
+        {/* Aquí está el Router del Frontend */}
+        {view === 'setup' && wizardStep === 1 && (showPrivateRepoAuth ? PrivateRepoAuthView() : Step1View())}
         {view === 'setup' && wizardStep === 2 && Step2View()}
         {view === 'analyzing' && (
           <div className="flex-1 flex flex-col items-center justify-center space-y-8 animate-in zoom-in duration-500">
@@ -1026,4 +1146,3 @@ const App = () => {
 };
  
 export default App;
-
