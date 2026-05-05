@@ -23,7 +23,7 @@ export const WIZARD_STEPS = [
   { id: 7, label: 'Lógica',      icon: Zap         },
 ];
 
-export const GITHUB_AUTH_URL = 'http://127.0.0.1:8000/auth/github';
+export const GITHUB_AUTH_URL = 'http://127.0.0.1:8000/login';
 
 export const getWizardStepForReviewIndex = (index) => 4 + index;
 
