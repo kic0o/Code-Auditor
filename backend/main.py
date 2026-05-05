@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
@@ -14,9 +14,8 @@ from services.llm_service import analizar_con_ia_externa, analizar_proyecto_comp
 from services.document_parser import extraer_texto_por_extension, DocumentParserError
 from workspace_manager import VirtualWorkspace
 from sandbox import sandbox_check, SandboxViolation
-from fastapi import Query
-from fastapi import Request
 from fastapi.responses import RedirectResponse
+
 
 # 1. Cargamos el archivo .env a la memoria del sistema
 load_dotenv()
@@ -411,53 +410,74 @@ async def upload_doc(file: UploadFile = File(...)):
 
 
 @app.post("/analyze/step")
-def analyze_step(request: StepAnalyzeRequest):
+async def analyze_step(
+    # Recibimos los datos como Form en lugar de BaseModel
+    session_id: str = Form(...),
+    categoria: str = Form(...),
+    repo_url: str = Form(""),
+    file_paths: str = Form(...),
+    # Recibimos los documentos (por defecto una lista vacía si el usuario no sube nada)
+    docs: list[UploadFile] = File(default=[])
+):
     """
     Analiza una lista de archivos para UNA SOLA categoría específica.
-    Crea la sesión si no existe y descarga de GitHub si la RAM está vacía.
+    Acepta multipart/form-data para procesar documentos adjuntos (PDFs/DOCX).
     """
-    print(f"\n--- 🚀 INICIANDO ANÁLISIS DE CATEGORÍA: {request.categoria} ---")
-    url_destino = URLS_IA.get(request.categoria)
+    print(f"\n--- 🚀 INICIANDO ANÁLISIS DE CATEGORÍA: {categoria} ---")
+    
+    # 0. Deserializar la lista de archivos que viene como string JSON desde React
+    try:
+        lista_archivos = json.loads(file_paths)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="Formato inválido en file_paths.")
 
+    url_destino = URLS_IA.get(categoria)
     if url_destino is None:
         raise HTTPException(status_code=400, detail="Categoría no configurada.")
 
     # 1. SEGURIDAD DE SESIÓN: Si la sesión no existe en RAM, la creamos
-    if request.session_id not in workspace.sessions:
-        print(f"🆕 Registrando ID de sesión desconocido: {request.session_id}")
-        workspace.sessions[request.session_id] = {}
+    if session_id not in workspace.sessions:
+        print(f"🆕 Registrando ID de sesión desconocido: {session_id}")
+        workspace.sessions[session_id] = {}
+
+    # 📄 NUEVO: Procesamiento de Documentos de Arquitectura
+    if docs:
+        print(f"📄 Se recibieron {len(docs)} documentos adjuntos para contexto.")
+        for doc in docs:
+            contenido_bytes = await doc.read() # Leemos el binario en la RAM
+            print(f" - Documento listo en RAM: {doc.filename} ({len(contenido_bytes)} bytes)")
+            # TODO: Aquí puedes pasar 'contenido_bytes' a Gemini para que lea el PDF
 
     # 2. Mock si la URL está vacía
     if url_destino == "":
         hallazgos_mock = []
-        for fp in request.file_paths:
+        for fp in lista_archivos:
             hallazgos_mock.append({
-                "file_path": fp, "type": request.categoria, "severity": "info",
-                "title": f"Análisis de {request.categoria} Pendiente",
+                "file_path": fp, "type": categoria, "severity": "info",
+                "title": f"Análisis de {categoria} Pendiente",
                 "description": "Modelo en desarrollo.", "recommendation": "Respuesta simulada.",
                 "original_code": "", "secure_code": "", "line": 0
             })
-        return {"session_id": request.session_id, "hallazgos": hallazgos_mock, "omitidos": []}
+        return {"session_id": session_id, "hallazgos": hallazgos_mock, "omitidos": []}
 
     # 3. FLUJO DE CARGA (RAM + GitHub)
     archivos_en_ram = {}
     archivos_omitidos = []
 
-    for file_path in request.file_paths:
+    for file_path in lista_archivos:
         try:
             # Intentamos sacar de la RAM
-            codigo = workspace.get_file(request.session_id, file_path)
+            codigo = workspace.get_file(session_id, file_path)
             if not codigo or str(codigo).strip() == "": raise ValueError("Vacío")
             archivos_en_ram[file_path] = codigo
         except ValueError:
             # Si no está o falló, descargamos de GitHub
-            if request.repo_url:
+            if repo_url:
                 print(f"📥 Descargando {file_path} desde GitHub...")
                 try:
-                    file_data = get_file_content(request.repo_url, file_path)
+                    file_data = get_file_content(repo_url, file_path)
                     codigo_fresco = sandbox_check(file_path, file_data["content"])
-                    # Ahora add_file NO fallará porque aseguramos la sesión arriba
-                    workspace.add_file(request.session_id, file_path, codigo_fresco)
+                    workspace.add_file(session_id, file_path, codigo_fresco)
                     archivos_en_ram[file_path] = codigo_fresco
                 except Exception as e:
                     print(f"❌ Error descarga: {e}")
@@ -466,7 +486,7 @@ def analyze_step(request: StepAnalyzeRequest):
                 archivos_omitidos.append({"file_path": file_path, "reason": "No hay URL de repo"})
 
     if not archivos_en_ram:
-        return {"session_id": request.session_id, "hallazgos": [], "omitidos": archivos_omitidos}
+        return {"session_id": session_id, "hallazgos": [], "omitidos": archivos_omitidos}
 
     # 4. ENVÍO A AZURE
     payload = {"files": archivos_en_ram}
@@ -477,21 +497,7 @@ def analyze_step(request: StepAnalyzeRequest):
         respuesta.raise_for_status()
         datos_azure = respuesta.json()
 
-        # EXTRACTOR UNIVERSAL
-        hallazgos = []
-        if isinstance(datos_azure, list): hallazgos = datos_azure
-        elif isinstance(datos_azure, dict):
-            for key in ["findings", "vulnerabilities", "issues"]:
-                if key in datos_azure:
-                    hallazgos = datos_azure[key]
-                    break
-            if not hallazgos: # Fallback
-                for v in datos_azure.values():
-                    if isinstance(v, list): hallazgos = v; break
-        
-        print(f"✅ Análisis completado: {len(hallazgos)} hallazgos.")
-        
-        # 🧠 6. EXTRACTOR UNIVERSAL (A prueba de cambios de Jorge/Diego)
+        # 🧠 5. EXTRACTOR UNIVERSAL (A prueba de cambios de Jorge/Diego)
         hallazgos_crudos = []
         
         if isinstance(datos_azure, list):
@@ -504,37 +510,34 @@ def analyze_step(request: StepAnalyzeRequest):
             elif "issues" in datos_azure:
                 hallazgos_crudos = datos_azure["issues"]
             else:
+                # Fallback: busca la primera lista que encuentre en el diccionario
                 for key, value in datos_azure.items():
                     if isinstance(value, list):
                         hallazgos_crudos = value
                         break
         
-        # 🛡️ 7. FILTRO ANTI-DUPLICADOS (El escudo del Backend)
+        print(f"✅ Extracción completada: {len(hallazgos_crudos)} hallazgos crudos de Azure.")
+
+        # 🛡️ 6. FILTRO ANTI-DUPLICADOS (El escudo del Backend)
         hallazgos_del_paso = []
         firmas_vistas = set()
 
         for hallazgo in hallazgos_crudos:
-            # 1. Extraemos los datos clave para identificar si es el mismo error
-            # Buscamos en las llaves que usa Joshua o las que usa Jorge
             archivo = hallazgo.get("file", hallazgo.get("file_path", "Desconocido"))
             linea = str(hallazgo.get("line", "0"))
-            
-            # Usamos el tipo de error (category o type) como identificador
             categoria_error = hallazgo.get("category", hallazgo.get("type", ""))
             
-            # 2. Creamos una huella dactilar única para este error
             firma_unica = f"{archivo}-{linea}-{categoria_error}"
             
-            # 3. Si la firma es nueva, lo guardamos. Si ya existe, la IA lo repitió y lo ignoramos.
             if firma_unica not in firmas_vistas:
                 firmas_vistas.add(firma_unica)
                 hallazgos_del_paso.append(hallazgo)
         
-        print(f"✅ Extractor terminó: Azure mandó {len(hallazgos_crudos)}, pero filtrados quedaron {len(hallazgos_del_paso)} únicos.")
+        print(f"🛡️ Filtro terminó: De {len(hallazgos_crudos)} recibidos, {len(hallazgos_del_paso)} son únicos.")
 
         return {
-            "session_id": request.session_id,
-            "categoria_analizada": request.categoria,
+            "session_id": session_id,
+            "categoria_analizada": categoria,
             "hallazgos": hallazgos_del_paso,
             "omitidos": archivos_omitidos
         }
