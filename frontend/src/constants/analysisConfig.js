@@ -1,4 +1,4 @@
-import { FileText, ShieldAlert, Check, Zap, Github, Folder } from 'lucide-react';
+import { FileText, ShieldAlert, Check, Zap, Github, Folder, CheckCircle } from 'lucide-react';
 
 export const REVIEW_UPLOAD_CONFIG = {
   documentation: {
@@ -21,11 +21,13 @@ export const WIZARD_STEPS = [
   { id: 5, label: 'Seguridad',   icon: ShieldAlert },
   { id: 6, label: 'Prácticas',   icon: Check       },
   { id: 7, label: 'Lógica',      icon: Zap         },
+  { id: 8, label: 'Resumen',     icon: CheckCircle },
 ];
 
-export const GITHUB_AUTH_URL = 'http://127.0.0.1:8000/login';
+export const GITHUB_AUTH_URL = 'http://127.0.0.1:8000/auth/github';
 
 export const getWizardStepForReviewIndex = (index) => 4 + index;
+export const FINAL_REVIEW_STEP = 8;
 
 export const createEmptyCategorySelection = () =>
   ANALYSIS_CATEGORIES.reduce((acc, c) => { acc[c.id] = new Set(); return acc; }, {});

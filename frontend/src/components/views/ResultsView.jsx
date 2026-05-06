@@ -17,8 +17,11 @@ function ResultsView({
   
   // Usamos selectedFileMatrix en lugar de pasar vacío para verificar completitud
   const isCurrentCategoryDone = isCategoryCompleted(activeCategory.id, selectedFileMatrix);
-  const isLastCategory = currentReviewIndex === ANALYSIS_CATEGORIES.length - 1;
   const isAllReviewCompleted = reviewCompleted(selectedFileMatrix);
+  const nextSelectedCategoryIndex = ANALYSIS_CATEGORIES.findIndex(
+    (category, index) => index > currentReviewIndex && selectedFileMatrix[category.id].size > 0
+  );
+  const shouldGoToFinalSummary = nextSelectedCategoryIndex === -1;
 
   // Función para navegar entre categorías desde el menú lateral
   return (
@@ -222,7 +225,7 @@ function ResultsView({
                   <button onClick={handleReset} className="flex items-center gap-2 text-slate-400 font-bold hover:text-blue-600 transition-colors text-lg">
                     <ArrowLeft size={16} /> Nuevo análisis
                   </button>
-                  {!isLastCategory ? (
+                  {!shouldGoToFinalSummary ? (
                     <button onClick={advanceToNextCategory} disabled={!isCurrentCategoryDone}
                       className={`px-8 py-3 rounded-xl font-bold text-lg flex items-center gap-2 transition-all ${
                         isCurrentCategoryDone ? 'bg-blue-600 text-white shadow-lg shadow-blue-200 hover:bg-blue-700' : 'bg-slate-200 text-slate-400 cursor-not-allowed'

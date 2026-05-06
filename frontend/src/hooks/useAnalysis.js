@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react';
-import { ANALYSIS_CATEGORIES, getWizardStepForReviewIndex } from '../constants/analysisConfig';
+import { ANALYSIS_CATEGORIES, FINAL_REVIEW_STEP, getWizardStepForReviewIndex } from '../constants/analysisConfig';
 import { analyzeStep, applyPatches } from '../services/api';
 
 export function useAnalysis() {
@@ -123,6 +123,9 @@ export function useAnalysis() {
       if (!fetchedCategories.has(nextCatId)) {
         await fetchCategoryData(nextIndex, selectedFileMatrix, repoUrl, setView, setCurrentlyAnalyzingCategory, uploadedDocs);
       }
+    } else {
+      setWizardStep(FINAL_REVIEW_STEP);
+      setView('results');
     }
   };
 
