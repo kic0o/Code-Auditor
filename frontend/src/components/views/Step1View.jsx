@@ -74,9 +74,9 @@ function Step1View({ repoUrl, setRepoUrl, handleConnect, loadingFiles, error, us
             </button>
 
             {/* Botón Instalar GitHub App */}
-            <a href={GITHUB_AUTH_URL} className="w-full py-3 flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-600 font-bold text-base transition-all">
+            <a href= "https://github.com/apps/Linter-Logic-App" className="w-full py-3 flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-600 font-bold text-base transition-all">
               <Github size={16} />
-              Autorizar con GitHub
+              Instalar GitHub App
             </a>
 
             <div className="pt-2 border-t border-slate-100 mt-4">
