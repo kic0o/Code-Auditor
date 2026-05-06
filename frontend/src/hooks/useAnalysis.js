@@ -16,10 +16,13 @@ export function useAnalysis() {
     return raw.map(f => ({
       ...f,
       file_path: f.file_path || f.file || f.archivo || 'Global/Multiple',
-      description: f.description || f.sugerencia || f.explanation || 'Revisar código.',
-      recommendation: f.recommendation || f.sugerencia || 'Sugerencia no proporcionada.',
+      // 🔥 Le damos formato al título si solo viene una palabra
+      title: f.title || f.name || (f.error_type ? `Incidencia de ${f.error_type}` : 'Hallazgo del sistema'),
+      // 🔥 Ponemos un texto profesional si la IA de Jorge no manda explicación
+      description: f.description || f.explanation || 'Se detectó una desviación respecto a las reglas de negocio y estándares de arquitectura definidos.',
+      recommendation: f.recommendation || f.suggestion || f.sugerencia || 'Aplica el código seguro.',
       original_code: f.original_code || f.codigo_original || '',
-      secure_code: f.secure_code || f.codigo_corregido || '',
+      secure_code: f.secure_code || f.corrected_code || f.codigo_corregido || '',
       type: f.type || 'business_rules',
       severity: 'critical',
     }));
@@ -75,16 +78,19 @@ export function useAnalysis() {
         repoUrl,
         uploadedDocs
       );
-      const normalized = (data.hallazgos || []).map(f => ({
+      // 🔥 Le decimos que busque data.hallazgos o data.issues por si el backend lo manda crudo
+      const normalized = (data.hallazgos || data.issues || []).map(f => ({
         ...f,
         file_path: f.file || f.file_path || f.archivo || 'Global/Multiple',
-        title: f.title || f.name || 'Hallazgo de ' + category.label,
-        description: f.explanation || f.description || 'Revisar código.',
-        recommendation: f.recommendation || f.sugerencia || 'Sugerencia no proporcionada.',
+        // 🔥 El mismo formato elegante
+        title: f.title || f.name || (f.error_type ? `Incidencia de ${f.error_type}` : `Hallazgo de ${category.label}`),
+        // 🔥 El mismo texto profesional
+        description: f.description || f.explanation || 'Se detectó una desviación respecto a las reglas de negocio y estándares de arquitectura definidos.',
+        recommendation: f.recommendation || f.suggestion || f.sugerencia || 'Aplica el código seguro.',
         original_code: f.original_code || f.codigo_original || '',
-        secure_code: f.corrected_code || f.optimized_code || f.secure_code || '',
+        secure_code: f.secure_code || f.corrected_code || f.optimized_code || '',
         type: category.id,
-        sub_categoria: f.category || 'General',
+        sub_categoria: f.category || f.error_type || 'General',
         severity: f.severity || 'warning',
         line: f.line || null,
       }));
