@@ -132,7 +132,9 @@ function App() {
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col font-sans selection:bg-blue-100 selection:text-blue-900">
-      <Header userGithubToken={auth.userGithubToken} />
+      <Header userGithubToken={auth.userGithubToken}
+              onLogout={auth.logout}
+               />
       <WizardBar currentStep={wizardStep} />
 
       <main className="flex-1 px-8 py-10 flex flex-col">

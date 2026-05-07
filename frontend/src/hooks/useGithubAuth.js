@@ -9,6 +9,16 @@ export function useGithubAuth() {
   const [repoAccessMessage, setRepoAccessMessage] = useState('');
   const [userGithubToken, setUserGithubToken] = useState(null);
 
+  // --- NUEVA FUNCIÓN DE LOGOUT ---
+  const logout = () => {
+    window.localStorage.removeItem(GITHUB_TOKEN_STORAGE_KEY);
+    setUserGithubToken(null);
+    setGithubAuthorized(false);
+    setRepoAccessMessage('');
+    // Opcional: recargar la página para limpiar todo el estado de la app
+    window.location.reload(); 
+  };
+
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const tokenFromUrl = params.get('github_token');
@@ -53,5 +63,6 @@ export function useGithubAuth() {
     userGithubToken,
     setUserGithubToken,
     shouldShowPrivateRepoAuth,
+    logout
   };
 }
