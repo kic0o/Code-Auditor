@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Github } from 'lucide-react'; // Añadido el icono para la pantalla de carga
+import { Github } from 'lucide-react';
 import { useGithubAuth } from './hooks/useGithubAuth';
 import { useFileSelection } from './hooks/useFileSelection';
 import { useAnalysis } from './hooks/useAnalysis';
@@ -9,7 +9,6 @@ import Header from './components/layout/Header';
 import Footer from './components/layout/Footer';
 import WizardBar from './components/layout/WizardBar';
 import Step1View from './components/views/Step1View';
-import PrivateRepoAuthView from './components/views/PrivateRepoAuthView';
 import Step2View from './components/views/Step2View';
 import ResultsView from './components/views/ResultsView';
 
@@ -41,16 +40,9 @@ function App() {
       files.resetFileSelection();
       files.setRepoFiles(mapeados);
       setView('setup');
-      auth.setShowPrivateRepoAuth(false);
       setWizardStep(2);
     } catch (err) {
-      if (auth.shouldShowPrivateRepoAuth(err.status, err.payload)) {
-        setView('setup');
-        setWizardStep(1);
-        auth.setShowPrivateRepoAuth(true);
-        return;
-      }
-      setError('No se pudo conectar con el backend o el repositorio no existe.');
+      setError(err.payload?.detail || err.message || 'No se pudo conectar con el backend o el repositorio no existe.');
     } finally {
       setLoadingFiles(false);
     }
@@ -67,7 +59,7 @@ function App() {
     analysis.startAnalysis(
       files.selectedFileMatrix, repoUrl,
       setView, setCurrentlyAnalyzingCategory, setWizardStep,
-      files.uploadedDocs // Pasando los documentos subidos
+      files.uploadedDocs
     );
   };
 
@@ -75,7 +67,7 @@ function App() {
     analysis.advanceToNextCategory(
       files.selectedFileMatrix, repoUrl,
       setView, setCurrentlyAnalyzingCategory, setWizardStep,
-      files.uploadedDocs // Pasando los documentos subidos
+      files.uploadedDocs
     );
   };
 
@@ -108,8 +100,7 @@ function App() {
 
   const enviarDecisionesAlBackend = () => {
     if (!auth.userGithubToken) {
-      auth.setRepoAccessMessage('Necesitas autorizar GitHub antes de crear el Pull Request con los cambios aceptados.');
-      auth.setShowPrivateRepoAuth(true);
+      alert('Necesitas autorizar GitHub antes de crear el Pull Request con los cambios aceptados.');
       setView('setup');
       setWizardStep(1);
       return;
@@ -117,24 +108,24 @@ function App() {
 
     analysis.enviarDecisionesAlBackend(
       repoUrl, auth.userGithubToken,
-      auth.setShowPrivateRepoAuth, handleReset
+      () => {}, // Se elimina el callback the setShowPrivateRepoAuth
+      handleReset
     );
   };
 
   const currentReviewCategory = ANALYSIS_CATEGORIES[analysis.currentReviewIndex];
+  
+  // Nueva lógica de enrutamiento de pantallas (más limpia)
   const currentScreen = (() => {
     if (view === 'analyzing') return 'analyzing';
     if (view === 'results') return 'results';
-    if (view === 'setup' && auth.showPrivateRepoAuth) return 'private-auth';
     if (view === 'setup' && wizardStep === 2) return 'file-selection';
     return 'repo-connect';
   })();
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col font-sans selection:bg-blue-100 selection:text-blue-900">
-      <Header userGithubToken={auth.userGithubToken}
-              onLogout={auth.logout}
-               />
+      <Header userGithubToken={auth.userGithubToken} onLogout={auth.logout} />
       <WizardBar currentStep={wizardStep} />
 
       <main className="flex-1 px-8 py-10 flex flex-col">
@@ -157,19 +148,7 @@ function App() {
           </div>
         )}
 
-        {currentScreen === 'private-auth' && (
-          <PrivateRepoAuthView
-            githubAuthorized={auth.githubAuthorized}
-            repoAccessMessage={auth.repoAccessMessage}
-            repoUrl={repoUrl}
-            setRepoUrl={setRepoUrl}
-            handleConnect={handleConnect}
-            loadingFiles={loadingFiles}
-            error={error}
-            setShowPrivateRepoAuth={auth.setShowPrivateRepoAuth}
-          />
-        )}
-
+        {/* Paso 1: Conexión unificada */}
         {currentScreen === 'repo-connect' && (
           <Step1View
             repoUrl={repoUrl}
@@ -178,10 +157,10 @@ function App() {
             loadingFiles={loadingFiles}
             error={error}
             userGithubToken={auth.userGithubToken}
-            setShowPrivateRepoAuth={auth.setShowPrivateRepoAuth}
           />
         )}
 
+        {/* Paso 2: Selección de archivos */}
         {currentScreen === 'file-selection' && (
           <Step2View
             repoUrl={repoUrl}
