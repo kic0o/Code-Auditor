@@ -6,6 +6,13 @@ class VirtualWorkspace:
         # Estructura: {"session_id": {"ruta/del/archivo.py": "contenido del código..."}}
         self.sessions = {}
 
+    # Dentro de tu clase VirtualWorkspace
+    def get_all_files(self, session_id: str):
+        """Devuelve un diccionario {ruta: contenido} de toda la sesión."""
+        if session_id not in self.sessions:
+            return {}
+        return self.sessions[session_id]
+    
     def create_session(self) -> str:
         """Crea una nueva sesión vacía y devuelve un ID único."""
         session_id = str(uuid.uuid4())

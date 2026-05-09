@@ -83,10 +83,10 @@ def analizar_proyecto_completo(session_id: str, files_dict: dict, url_api: str, 
 # 3. TRADUCTOR DE REGLAS DE NEGOCIO (Con PDFs)
 # ==========================================
 def analizar_reglas_negocio(session_id: str, files_dict: dict, contexto_arquitectura: str, url_api: str):
-    """Específico para Reglas de Negocio. Inyecta el texto de los documentos."""
+    """Específico para Reglas de Negocio. Lee el nuevo formato de JSON de la IA."""
     payload = {
-        "files": files_dict,
-        "architectural_rules": contexto_arquitectura
+        "architectural_rules": contexto_arquitectura,
+        "files": files_dict
     }
 
     try:
@@ -96,19 +96,21 @@ def analizar_reglas_negocio(session_id: str, files_dict: dict, contexto_arquitec
         
         datos = respuesta.json()
         hallazgos_estandarizados = []
+        
+        # Leemos el arreglo "issues" que manda Jorge
         lista_issues = datos.get("issues", [])
 
         for item in lista_issues:
             hallazgos_estandarizados.append({
-                "file_path": item.get("archivo", "Global"),
+                "file_path": item.get("file", "Global"),  # 🔄 Actualizado
                 "type": "business_rules",
                 "severity": "critical", 
-                "title": f"Regla de Negocio: {item.get('tipo_error', 'Estilo')}",
-                "description": item.get("sugerencia", "Sin descripción"),
-                "recommendation": "Sigue los estándares definidos en el documento de arquitectura.",
-                "original_code": item.get("codigo_original", ""),
-                "secure_code": item.get("codigo_corregido", ""),
-                "line": item.get("linea", 0)
+                "title": f"Regla de Negocio: {item.get('error_type', 'Arquitectura')}", # 🔄 Actualizado
+                "description": item.get("suggestion", "Sin descripción"), # 🔄 Actualizado
+                "recommendation": "Aplica el código seguro sugerido para cumplir el estándar.",
+                "original_code": item.get("original_code", ""), # 🔄 Actualizado
+                "secure_code": item.get("secure_code", ""),     # 🔄 Actualizado
+                "line": item.get("line", 0)                     # 🔄 Actualizado
             })
 
         return hallazgos_estandarizados
