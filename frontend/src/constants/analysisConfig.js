@@ -24,7 +24,7 @@ export const WIZARD_STEPS = [
   { id: 8, label: 'Resumen',     icon: CheckCircle },
 ];
 
-export const GITHUB_AUTH_URL = 'http://127.0.0.1:8000/login';
+export const GITHUB_AUTH_URL = 'https://code-auditor-backend.onrender.com';
 
 export const getWizardStepForReviewIndex = (index) => 4 + index;
 export const FINAL_REVIEW_STEP = 8;
