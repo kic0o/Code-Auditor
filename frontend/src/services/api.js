@@ -46,20 +46,19 @@ export const analyzeStep = async (sessionId, filePaths, categoria, repoUrl, docs
 };
 
 export const applyPatches = async (sessionId, approvedFindings, repoPath) => {
-  // 1. Recuperamos el token usando la llave exacta que encontraste
   const token = localStorage.getItem('code-auditor-github-token');
 
   const response = await fetch(`${BASE_URL}/apply-patches`, {
     method: 'POST',
     headers: { 
       'Content-Type': 'application/json',
-      // 🛡️ El token viaja seguro en la cabecera
-      'Authorization': `Bearer ${token}` 
+      'Authorization': `Bearer ${token}` // Lo dejamos aquí también por buena práctica
     },
     body: JSON.stringify({
       session_id: sessionId || 'sesion-actual',
       approved_findings: approvedFindings,
       repo_name: repoPath,
+      github_token: token, // 🚨 ¡LA PIEZA FALTANTE! Regresamos el token al body para que el backend lo lea.
     }),
   });
   
