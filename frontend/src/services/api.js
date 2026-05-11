@@ -1,4 +1,4 @@
-const BASE_URL = 'http://127.0.0.1:8000';
+const BASE_URL = 'https://code-auditor-backend.onrender.com';
 
 export const getRepoFiles = async (repoUrl) => {
   const response = await fetch(`${BASE_URL}/files`, {
@@ -37,7 +37,6 @@ export const analyzeStep = async (sessionId, filePaths, categoria, repoUrl, docs
 
   const response = await fetch(`${BASE_URL}/analyze/step`, {
     method: 'POST',
-    // ❌ ELIMINADO: headers: { 'Content-Type': 'application/json' }
     // Fetch añade automáticamente el Content-Type: multipart/form-data
     body: formData,
   });
@@ -46,17 +45,23 @@ export const analyzeStep = async (sessionId, filePaths, categoria, repoUrl, docs
   return response.json();
 };
 
-export const applyPatches = async (sessionId, approvedFindings, repoPath, githubToken) => {
+export const applyPatches = async (sessionId, approvedFindings, repoPath) => {
   const response = await fetch(`${BASE_URL}/apply-patches`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    
+    // 🛡️ LA CLAVE DE LA SEGURIDAD: 
+    // Esto le dice al navegador "Adjunta la Cookie HttpOnly secreta en este viaje"
+    credentials: 'include', 
+
+    // ❌ Eliminamos github_token del body. Ya no viaja expuesto, viaja en la Cookie.
     body: JSON.stringify({
       session_id: sessionId || 'sesion-actual',
       approved_findings: approvedFindings,
       repo_name: repoPath,
-      github_token: githubToken,
     }),
   });
+  
   if (!response.ok) throw new Error('Error aplicando parches');
   return response.json();
 };
