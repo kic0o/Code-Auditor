@@ -35,7 +35,7 @@ app = FastAPI(title="Code Auditor API", version="5.1.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[FRONTEND_URL],
+    allow_origins=["https://frontend-linterlogic.netlify.app"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -605,7 +605,7 @@ def github_callback(code: str):
         
     access_token = datos["access_token"]
     print(f"🔑 ¡Token OAuth obtenido con éxito!: {access_token[:8]}...")
-    url_frontend = f"{FRONTEND_URL}?github_token={access_token}"
+    url_frontend = f"https://frontend-linterlogic.netlify.app?github_token={access_token}"
     return RedirectResponse(url=url_frontend)
 
 
