@@ -46,15 +46,16 @@ export const analyzeStep = async (sessionId, filePaths, categoria, repoUrl, docs
 };
 
 export const applyPatches = async (sessionId, approvedFindings, repoPath) => {
+  // 1. Recuperamos el token usando la llave exacta que encontraste
+  const token = localStorage.getItem('code-auditor-github-token');
+
   const response = await fetch(`${BASE_URL}/apply-patches`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    
-    // 🛡️ LA CLAVE DE LA SEGURIDAD: 
-    // Esto le dice al navegador "Adjunta la Cookie HttpOnly secreta en este viaje"
-    credentials: 'include', 
-
-    // ❌ Eliminamos github_token del body. Ya no viaja expuesto, viaja en la Cookie.
+    headers: { 
+      'Content-Type': 'application/json',
+      // 🛡️ El token viaja seguro en la cabecera
+      'Authorization': `Bearer ${token}` 
+    },
     body: JSON.stringify({
       session_id: sessionId || 'sesion-actual',
       approved_findings: approvedFindings,
