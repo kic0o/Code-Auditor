@@ -4,7 +4,7 @@ function Footer() {
       <div className="max-w-7xl mx-auto flex justify-between items-center text-[14px] font-bold text-slate-400 uppercase tracking-widest">
         <div className="flex gap-6">
           <span>ESCOM - INGENIERÍA EN IA</span>
-          <span>© 2024 AUDIT SYSTEM</span>
+          <span>© 2026 AUDIT SYSTEM</span>
         </div>
         <div className="flex gap-6">
           <span className="flex items-center gap-2">

@@ -33,7 +33,7 @@ app = FastAPI(title="Code Auditor API", version="5.1.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://coruscating-pasca-3d74ac.netlify.app"],
+    allow_origins=["https://frontend-linterlogic.netlify.app"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -607,7 +607,7 @@ def github_callback(code: str):
     # PASO 3: Devolver al usuario al Frontend de Joshua (React)
     # Mandamos el token en la URL para que React lo atrape y lo guarde
     # Ajusta el puerto (ej. 5173 o 3000) según donde corra tu React
-    url_frontend = f"https://coruscating-pasca-3d74ac.netlify.app?github_token={access_token}"
+    url_frontend = f"https://frontend-linterlogic.netlify.app?github_token={access_token}"
     return RedirectResponse(url=url_frontend)
 
 
